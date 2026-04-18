@@ -1,0 +1,30 @@
+{
+  "target": "localhost/secgrc_uat_db",
+  "findings": [
+    {
+      "detector": "Aadhaar",
+      "table_name": "soa_entries",
+      "column_name": "id",
+      "sample_count": 1,
+      "sensitivity": "CRITICAL",
+      "is_dpdp_spdi": true
+    },
+    {
+      "detector": "Email",
+      "table_name": "users",
+      "column_name": "email",
+      "sample_count": 4,
+      "sensitivity": "LOW",
+      "is_dpdp_spdi": false
+    },
+    {
+      "detector": "IPAddress",
+      "table_name": "pii_agents",
+      "column_name": "ip_address",
+      "sample_count": 1,
+      "sensitivity": "LOW",
+      "is_dpdp_spdi": false
+    }
+  ],
+  "scanned_at": "2026-04-18T09:16:39.483933"
+}
