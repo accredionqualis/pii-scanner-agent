@@ -141,8 +141,7 @@ def scan_files(args):
     print(f"Report saved: {report_file}")
 
 def scan_network(args):
-    from api_scanner import scan_api_endpoints
-from network_scanner import scan_network as do_scan
+    from network_scanner import scan_network as do_scan
     print(f"\n{'='*60}")
     print(f"SCE GRC PII Scanner — Network Discovery")
     print(f"CIDR: {args.cidr}")
