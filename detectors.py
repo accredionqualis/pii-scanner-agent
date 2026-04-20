@@ -1,5 +1,4 @@
 import re
-import hashlib
 
 def verhoeff_check(number):
     d = [[0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],[3,4,0,1,2,8,9,5,6,7],[4,0,1,2,3,9,5,6,7,8],[5,9,8,7,6,0,4,3,2,1],[6,5,9,8,7,1,0,4,3,2],[7,6,5,9,8,2,1,0,4,3],[8,7,6,5,9,3,2,1,0,4],[9,8,7,6,5,4,3,2,1,0]]
@@ -43,18 +42,35 @@ DETECTORS = [
      'validate':lambda m: True},
 ]
 
-def scan_text(text, max_samples=5):
+def mask_value(v):
+    v = re.sub(r'\s', '', str(v))
+    if len(v) <= 4:
+        return '****'
+    elif len(v) <= 8:
+        return v[:2] + '*' * (len(v)-4) + v[-2:]
+    else:
+        return v[:3] + '*' * (len(v)-6) + v[-3:]
+
+def scan_text(text, max_samples=100):
     findings = []
     for det in DETECTORS:
         matches = re.findall(det['pattern'], text)
         valid = [m for m in matches if det['validate'](re.sub(r'\s','',m))]
         if valid:
+            # Deduplicate while preserving order
+            seen = set()
+            unique = []
+            for v in valid:
+                key = re.sub(r'\s','',v)
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(v)
             findings.append({
                 'detector': det['name'],
                 'sensitivity': det['sensitivity'],
                 'dpdp_spdi': det['dpdp_spdi'],
                 'sample_count': len(valid),
-                'samples': [hashlib.sha256(v.encode()).hexdigest()[:8]+'***' for v in valid[:max_samples]]
+                'matches': [mask_value(v) for v in unique[:max_samples]],
             })
     return findings
 
