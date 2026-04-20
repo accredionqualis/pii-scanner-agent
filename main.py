@@ -141,7 +141,8 @@ def scan_files(args):
     print(f"Report saved: {report_file}")
 
 def scan_network(args):
-    from network_scanner import scan_network as do_scan
+    from api_scanner import scan_api_endpoints
+from network_scanner import scan_network as do_scan
     print(f"\n{'='*60}")
     print(f"SCE GRC PII Scanner — Network Discovery")
     print(f"CIDR: {args.cidr}")
@@ -150,6 +151,33 @@ def scan_network(args):
     print(f"\nDiscovered {len(results)} database services:")
     for r in results:
         print(f"  {r['host']}:{r['port']} — {r['service']}")
+
+def scan_api(args):
+    config = load_config()
+    server_url = config.get('server_url','')
+    api_key = config.get('api_key','')
+    if not server_url or not api_key:
+        print('Not configured. Run: configure --server URL --api-key KEY')
+        return
+
+    endpoints = [e.strip() for e in args.endpoints.split(',') if e.strip()]
+    headers = {}
+    if args.token:
+        headers['Authorization'] = args.token if args.token.startswith('Bearer') else f'Bearer {args.token}'
+    if args.header:
+        for h in args.header:
+            k,v = h.split(':',1)
+            headers[k.strip()] = v.strip()
+
+    from api_client import PIIAgentClient
+    client = PIIAgentClient(server_url, api_key)
+    findings, results = scan_api_endpoints(args.url, endpoints, headers=headers)
+    
+    if findings:
+        client.submit_findings('api', args.url, findings)
+        print(f'Submitted {len(findings)} findings to SCE GRC')
+    else:
+        print('No PII found in API responses')
 
 def main():
     parser = argparse.ArgumentParser(
@@ -199,6 +227,15 @@ Examples:
     # Network scan
     net = subparsers.add_parser('network', help='Discover databases on network')
     net.add_argument('--cidr', required=True, help='Network CIDR e.g. 192.168.1.0/24')
+
+    # API endpoint scanner
+    api_parser = subparsers.add_parser('api', help='Scan API endpoints for PII')
+    api_parser.add_argument('--url', required=True, help='Base API URL (e.g. https://api.example.com)')
+    api_parser.add_argument('--endpoints', required=True, help='Comma-separated endpoints (e.g. /users,/customers)')
+    api_parser.add_argument('--token', help='Bearer token for auth')
+    api_parser.add_argument('--header', action='append', help='Custom header (Key:Value), can repeat')
+    api_parser.add_argument('--no-ssl-verify', action='store_true', help='Skip SSL verification')
+    api_parser.set_defaults(func=scan_api)
 
     args = parser.parse_args()
 
