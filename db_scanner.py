@@ -88,6 +88,15 @@ class DBScanner:
                         col_text = ' '.join(str(r[col_idx]) for r in rows if r[col_idx] is not None)
                         col_findings = scan_text(col_text)
                         for f in col_findings:
+                            # Mask sample values - show only first/last 2 chars
+                            raw_samples = f.get('matches', [])[:3]
+                            masked = []
+                            for s in raw_samples:
+                                s = str(s)
+                                if len(s) > 4:
+                                    masked.append(s[:2] + '*'*(len(s)-4) + s[-2:])
+                                else:
+                                    masked.append('****')
                             findings.append({
                                 'detector': f['detector'],
                                 'table_name': table,
@@ -95,6 +104,7 @@ class DBScanner:
                                 'sample_count': f['sample_count'],
                                 'sensitivity': f['sensitivity'],
                                 'is_dpdp_spdi': f['dpdp_spdi'],
+                                'sample_values': masked,
                             })
                 except Exception as e:
                     pass
