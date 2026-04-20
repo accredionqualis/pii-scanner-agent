@@ -56,3 +56,31 @@ if __name__ == '__main__':
         print(f"  {r['file_path']}: {r['detector']} ({r['sensitivity']})")
     import shutil
     shutil.rmtree(d)
+
+
+def scan_image_for_pii(image_path, detectors):
+    """Extract text from image using OCR and scan for PII"""
+    try:
+        import pytesseract
+        from PIL import Image
+        img = Image.open(image_path)
+        text = pytesseract.image_to_string(img)
+        if not text.strip():
+            return []
+        findings = []
+        for name, detector in detectors.items():
+            matches = detector(text)
+            if matches:
+                findings.append({
+                    'detector_name': name,
+                    'file_path': image_path,
+                    'sample_count': len(matches),
+                    'sensitivity': 'HIGH',
+                    'is_dpdp_spdi': name in ['aadhaar','pan','passport'],
+                    'data_classes': [name]
+                })
+        return findings
+    except ImportError:
+        return []
+    except Exception as e:
+        return []
