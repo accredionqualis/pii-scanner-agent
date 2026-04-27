@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Build Windows EXE + Linux Binary
 
 on:
   push:
@@ -8,7 +8,6 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -44,16 +43,77 @@ jobs:
             main.py
 
       - name: Verify EXE
-        run: |
-          dir dist\
-          dist\KnightGuard-PII-Scanner.exe --help
+        run: dist\KnightGuard-PII-Scanner.exe status
 
-      - name: Upload artifact
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KnightGuard-PII-Scanner-Windows-v2
+          name: KnightGuard-PII-Scanner-Windows
           path: dist\KnightGuard-PII-Scanner.exe
           retention-days: 90
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller psycopg2-binary oracledb mysql-connector-python pymongo pdfplumber pytesseract Pillow requests
+
+      - name: Build Linux binary
+        run: |
+          python -m PyInstaller \
+            --onefile \
+            --name KnightGuard-PII-Scanner-Linux \
+            --clean \
+            --noconfirm \
+            --hidden-import psycopg2 \
+            --hidden-import oracledb \
+            --hidden-import mysql.connector \
+            --hidden-import pymongo \
+            --hidden-import pytesseract \
+            --hidden-import pdfplumber \
+            --hidden-import PIL \
+            main.py
+
+      - name: Verify binary
+        run: dist/KnightGuard-PII-Scanner-Linux status
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KnightGuard-PII-Scanner-Linux
+          path: dist/KnightGuard-PII-Scanner-Linux
+          retention-days: 90
+
+  create-release:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: KnightGuard-PII-Scanner-Windows
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: KnightGuard-PII-Scanner-Linux
+
+      - name: Make Linux binary executable
+        run: chmod +x KnightGuard-PII-Scanner-Linux
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -62,7 +122,13 @@ jobs:
           name: "KnightGuard PII Scanner v2.0.${{ github.run_number }}"
           body: |
             ## KnightGuard GRC PII Scanner Agent v2.0
-            **ByteKnight Security Pvt. Ltd.**
+            **ByteKnight Security Pvt. Ltd.** | knightguardgrc.com
+
+            ### Downloads
+            | Platform | File |
+            |----------|------|
+            | Windows  | `KnightGuard-PII-Scanner.exe` |
+            | Linux    | `KnightGuard-PII-Scanner-Linux` |
 
             ### Features
             - ✅ All major databases: PostgreSQL, MySQL, Oracle, MSSQL, MongoDB, SQLite
@@ -72,20 +138,34 @@ jobs:
             - ✅ Agent activation/deactivation by super admin
             - ✅ Full raw PII data sent (not just categories)
             - ✅ Upload offline scan results anytime
+            - ✅ Heartbeat on status — dashboard shows Online instantly
 
-            ### Quick Start
+            ### Windows Quick Start
             ```
             KnightGuard-PII-Scanner.exe configure --server https://api.knightguardgrc.com --api-key YOUR_KEY
             KnightGuard-PII-Scanner.exe status
             KnightGuard-PII-Scanner.exe discover
-            KnightGuard-PII-Scanner.exe scan-db --db "postgresql://user:pass@192.168.1.10/mydb"
-            KnightGuard-PII-Scanner.exe scan-db --db "oracle://user:pass@192.168.1.20:1521/ORCL"
+            KnightGuard-PII-Scanner.exe scan-db --db "postgresql://user:pass@host/db"
+            KnightGuard-PII-Scanner.exe scan-db --db "oracle://user:pass@host:1521/ORCL"
             KnightGuard-PII-Scanner.exe scan-files --path "C:\Users\Documents"
-            KnightGuard-PII-Scanner.exe scan-endpoint --targets 192.168.1.30,192.168.1.31
             KnightGuard-PII-Scanner.exe scan-db --db "postgresql://..." --offline
-            KnightGuard-PII-Scanner.exe upload --file pii_database_20260427.json
+            KnightGuard-PII-Scanner.exe upload --file pii_scan_results.json
             ```
-          files: dist\KnightGuard-PII-Scanner.exe
+
+            ### Linux Quick Start
+            ```bash
+            chmod +x KnightGuard-PII-Scanner-Linux
+            ./KnightGuard-PII-Scanner-Linux configure --server https://api.knightguardgrc.com --api-key YOUR_KEY
+            ./KnightGuard-PII-Scanner-Linux status
+            ./KnightGuard-PII-Scanner-Linux discover
+            ./KnightGuard-PII-Scanner-Linux scan-db --db "postgresql://user:pass@host/db"
+            ./KnightGuard-PII-Scanner-Linux scan-files --path /home
+            ./KnightGuard-PII-Scanner-Linux scan-db --db "postgresql://..." --offline
+            ./KnightGuard-PII-Scanner-Linux upload --file pii_scan_results.json
+            ```
+          files: |
+            KnightGuard-PII-Scanner.exe
+            KnightGuard-PII-Scanner-Linux
           draft: false
           prerelease: false
         env:
