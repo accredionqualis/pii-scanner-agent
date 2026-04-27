@@ -5,6 +5,7 @@ ByteKnight Security Pvt. Ltd.
 https://knightguardgrc.com
 """
 import json, os, sys, argparse, platform, socket, time
+from logger import set_verbose, vprint
 from datetime import datetime
 from pathlib import Path
 
@@ -112,11 +113,14 @@ def cmd_status(args):
 
 def cmd_scan_db(args):
     from db_scanner import scan_database
+    from logger import set_verbose
+    set_verbose(getattr(args, 'verbose', False))
     cfg = load_config()
     if not args.offline: _check_active(cfg)
     threads = args.threads or 20
     print(f"\n[DB SCAN] {args.db}")
     print(f"  Threads : {threads} parallel")
+    print(f"  Verbose : {'ON' if getattr(args,'verbose',False) else 'OFF — use --verbose for full detail'}")
     print(f"  Mode    : {'OFFLINE — saving to JSON' if args.offline else 'ONLINE — uploading to platform'}")
 
     findings = scan_database(args.db, max_rows=args.max_rows or 1000, send_raw=True, threads=threads)
@@ -147,6 +151,8 @@ def cmd_scan_db(args):
 
 def cmd_scan_files(args):
     from file_scanner import scan_files
+    from logger import set_verbose
+    set_verbose(getattr(args, 'verbose', False))
     cfg = load_config()
     if not args.offline: _check_active(cfg)
     print(f"\n[FILE SCAN] {args.path}")
@@ -264,6 +270,7 @@ def main():
     p.add_argument('--max-rows', type=int, default=1000)
     p.add_argument('--threads', type=int, default=20, help='Parallel threads (default 20, max 50)')
     p.add_argument('--offline', action='store_true')
+    p.add_argument('--verbose', action='store_true', help='Show detailed scan progress')
     p.set_defaults(func=cmd_scan_db)
 
     p = sub.add_parser('scan-files', help='Scan files/dirs/images for PII')
@@ -271,6 +278,7 @@ def main():
     p.add_argument('--max-files', type=int, default=5000)
     p.add_argument('--no-ocr', action='store_true', help='Skip OCR on images')
     p.add_argument('--offline', action='store_true')
+    p.add_argument('--verbose', action='store_true', help='Show detailed scan progress')
     p.set_defaults(func=cmd_scan_files)
 
     p = sub.add_parser('discover', help='Discover databases and endpoints on network')

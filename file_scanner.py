@@ -7,6 +7,7 @@ import os
 import re
 from pathlib import Path
 from detectors import scan_text
+from logger import vprint
 
 TEXT_EXTENSIONS = {
     '.txt', '.csv', '.json', '.xml', '.log', '.sql',
@@ -183,6 +184,7 @@ def scan_files(root_path, max_files=5000, ocr_images=True, send_raw=True):
                 continue
 
             result = []
+            vprint(f'Scanning: {fp}')
             if ext in TEXT_EXTENSIONS:
                 result = scan_text_file(fp)
             elif ext in PDF_EXTENSIONS:
@@ -198,6 +200,8 @@ def scan_files(root_path, max_files=5000, ocr_images=True, send_raw=True):
             if result:
                 findings.extend(result)
                 print(f"  [{count}] {fp.name} — {len(result)} finding(s)")
+                for r in result:
+                    vprint(f"    ✓ {r['detector']} in {fp.name}: {r.get('masked_values',['?'])[0]}")
 
             if count % 200 == 0:
                 print(f"  Scanned {count} files, {len(findings)} total findings...")

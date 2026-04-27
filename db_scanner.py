@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from pathlib import Path
 from detectors import scan_text
+from logger import vprint
 
 SKIP_SCHEMAS = {
     'pg_catalog', 'information_schema', 'pg_toast',
@@ -189,6 +190,12 @@ def _run_parallel_scan(tasks, scan_fn, conn_str, total, label='tables'):
             if done % CHECKPOINT_EVERY == 0:
                 _save_checkpoint(conn_str, done, total, all_findings, already_done)
 
+            if done % 100 == 0 or done == total:
+                elapsed = time.time() - start
+                rate = done / elapsed if elapsed > 0 else 0
+                remaining = total - done
+                eta = remaining / rate if rate > 0 else 0
+                vprint(f"Progress: {done}/{total} {label} | {len(all_findings)} findings | {rate:.0f}/sec | ETA: {eta/60:.1f}min")
             if done % 500 == 0 or done == total:
                 elapsed = time.time() - start
                 rate = done / elapsed if elapsed > 0 else 0
@@ -228,6 +235,7 @@ def _scan_pg_table(args):
             except Exception:
                 conn.close(); return findings
         rows = cur.fetchall()
+        vprint(f"[PG] {schema}.{table} — {len(rows)} rows, {len(columns)} cols")
         for col_idx, col in enumerate(columns):
             raw = []
             for row in rows:
@@ -235,10 +243,11 @@ def _scan_pg_table(args):
                 if val and len(str(val)) > 3:
                     raw.extend(scan_text(str(val), f'{schema}.{table}.{col}'))
             if raw:
+                vprint(f"  ✓ PII found: {schema}.{table}.{col} — {len(raw)} matches")
                 findings.extend(_aggregate_findings(raw, f'{schema}.{table}', col, 'postgresql'))
         cur.close(); conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        vprint(f"[SKIP] {schema}.{table} — {e}")
     return findings
 
 
@@ -359,6 +368,7 @@ def _scan_oracle_table(args):
             except Exception:
                 conn.close(); return findings
         rows = cur.fetchall()
+        vprint(f"[ORACLE] {owner}.{table} — {len(rows)} rows, {len(columns)} cols")
         for col_idx, col in enumerate(columns):
             raw = []
             for row in rows:
@@ -366,6 +376,7 @@ def _scan_oracle_table(args):
                 if val and len(str(val)) > 3:
                     raw.extend(scan_text(str(val), f'{owner}.{table}.{col}'))
             if raw:
+                vprint(f"  ✓ PII found: {owner}.{table}.{col} — {len(raw)} matches")
                 findings.extend(_aggregate_findings(raw, f'{owner}.{table}', col, 'oracle'))
         cur.close(); conn.close()
     except Exception:

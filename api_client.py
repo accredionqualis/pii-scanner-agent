@@ -7,6 +7,10 @@ import platform
 import socket
 import time
 from datetime import datetime
+try:
+    from logger import vprint
+except ImportError:
+    def vprint(*a, **k): pass
 
 AGENT_VERSION = '2.1.0'
 CHUNK_SIZE = 500  # findings per batch upload
@@ -114,6 +118,7 @@ class PIIAgentClient:
 
         scan_id = None
         for i, chunk in enumerate(chunks, 1):
+            vprint(f'[UPLOAD] Sending batch {i}/{total_chunks} ({len(chunk)} findings)')
             payload = self._build_payload(
                 scan_type, target, chunk, offline_data,
                 chunk=i, total_chunks=total_chunks,
@@ -127,6 +132,7 @@ class PIIAgentClient:
                     # Capture scan_id from first chunk response
                     if scan_id is None and isinstance(resp, dict):
                         scan_id = resp.get('scan_id')
+                    vprint(f'[UPLOAD] Batch {i} response: {resp}')
                     if total_chunks > 1:
                         print(f"  Batch {i}/{total_chunks} uploaded ({len(chunk)} findings) ✓")
                     break
