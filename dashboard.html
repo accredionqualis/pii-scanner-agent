@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>KnightGuard PII Scanner — Live Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #060810;
+  --bg2: #0c1020;
+  --bg3: #111827;
+  --border: #1e293b;
+  --border2: #1e40af33;
+  --text: #e2e8f0;
+  --text2: #94a3b8;
+  --text3: #475569;
+  --blue: #3b82f6;
+  --blue2: #1d4ed8;
+  --cyan: #06b6d4;
+  --green: #10b981;
+  --red: #ef4444;
+  --orange: #f59e0b;
+  --purple: #8b5cf6;
+  --glow-blue: 0 0 20px #3b82f620;
+  --glow-green: 0 0 20px #10b98120;
+  --glow-red: 0 0 20px #ef444420;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Syne', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Animated grid background */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 40px 40px;
+  opacity: 0.3;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.container { position: relative; z-index: 1; max-width: 1400px; margin: 0 auto; padding: 24px; }
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 28px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.header-left { display: flex; align-items: center; gap: 16px; }
+.logo {
+  width: 42px; height: 42px;
+  background: linear-gradient(135deg, var(--blue), var(--cyan));
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+  box-shadow: var(--glow-blue);
+}
+.header-title { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
+.header-sub { font-size: 11px; color: var(--text3); font-family: 'Space Mono', monospace; margin-top: 2px; }
+.header-right { display: flex; align-items: center; gap: 16px; }
+.live-badge {
+  display: flex; align-items: center; gap: 6px;
+  background: #10b98115; border: 1px solid #10b98130;
+  padding: 5px 12px; border-radius: 20px;
+  font-size: 11px; font-weight: 700; color: var(--green);
+  font-family: 'Space Mono', monospace;
+}
+.live-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--green);
+  animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+.last-update { font-size: 10px; color: var(--text3); font-family: 'Space Mono', monospace; }
+
+/* Config bar */
+.config-bar {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.config-group { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 200px; }
+.config-label { font-size: 10px; font-weight: 700; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; font-family: 'Space Mono', monospace; }
+.config-input {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-family: 'Space Mono', monospace;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.2s;
+  width: 100%;
+}
+.config-input:focus { border-color: var(--blue); }
+.btn {
+  padding: 9px 20px;
+  border-radius: 8px;
+  border: none;
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.btn-primary {
+  background: var(--blue);
+  color: white;
+  box-shadow: var(--glow-blue);
+}
+.btn-primary:hover { background: var(--blue2); transform: translateY(-1px); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.btn-secondary {
+  background: var(--bg3);
+  color: var(--text2);
+  border: 1px solid var(--border);
+}
+.btn-secondary:hover { border-color: var(--blue); color: var(--blue); }
+.btn-danger { background: #ef444420; color: var(--red); border: 1px solid #ef444430; }
+.btn-danger:hover { background: #ef444430; }
+
+/* KPI Grid */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+@media(max-width:1100px) { .kpi-grid { grid-template-columns: repeat(3,1fr); } }
+@media(max-width:700px) { .kpi-grid { grid-template-columns: repeat(2,1fr); } }
+
+.kpi {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.3s;
+}
+.kpi::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--accent, var(--blue));
+}
+.kpi-label { font-size: 9px; font-weight: 700; color: var(--text3); text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 8px; font-family: 'Space Mono', monospace; }
+.kpi-value { font-size: 28px; font-weight: 800; color: var(--accent, var(--text)); line-height: 1; margin-bottom: 4px; transition: all 0.5s; }
+.kpi-sub { font-size: 10px; color: var(--text3); font-family: 'Space Mono', monospace; }
+
+/* Main grid */
+.main-grid {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+@media(max-width:900px) { .main-grid { grid-template-columns: 1fr; } }
+
+.card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.card-header {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.card-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; font-family: 'Space Mono', monospace; color: var(--text2); }
+.card-body { padding: 18px; }
+
+/* Progress section */
+.progress-section { margin-bottom: 20px; }
+.progress-label {
+  display: flex; justify-content: space-between; margin-bottom: 8px;
+  font-size: 11px; font-family: 'Space Mono', monospace;
+}
+.progress-track {
+  background: var(--bg3);
+  border-radius: 4px;
+  height: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--blue), var(--cyan));
+  border-radius: 4px;
+  transition: width 0.5s ease;
+  position: relative;
+  overflow: hidden;
+}
+.progress-fill::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%; right: 0; bottom: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+  animation: shimmer 2s infinite;
+}
+@keyframes shimmer { to { left: 100%; } }
+
+/* Log terminal */
+.terminal {
+  background: #050810;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  height: 320px;
+  overflow-y: auto;
+  line-height: 1.7;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.terminal::-webkit-scrollbar { width: 4px; }
+.terminal::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.log-line { display: flex; gap: 10px; margin-bottom: 2px; }
+.log-time { color: var(--text3); flex-shrink: 0; }
+.log-text { color: var(--text2); }
+.log-text.success { color: var(--green); }
+.log-text.error { color: var(--red); }
+.log-text.warn { color: var(--orange); }
+.log-text.info { color: var(--cyan); }
+.log-text.pii { color: var(--purple); font-weight: 700; }
+.log-text.heading { color: var(--blue); font-weight: 700; }
+
+/* Findings table */
+.findings-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.findings-table th {
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text3);
+  font-family: 'Space Mono', monospace;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg3);
+}
+.findings-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-family: 'Space Mono', monospace;
+  vertical-align: top;
+}
+.findings-table tr:last-child td { border-bottom: none; }
+.findings-table tr:hover td { background: var(--bg3); }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  font-family: 'Space Mono', monospace;
+}
+.badge-critical { background: #ef444420; color: var(--red); border: 1px solid #ef444430; }
+.badge-high { background: #f59e0b20; color: var(--orange); border: 1px solid #f59e0b30; }
+.badge-medium { background: #3b82f620; color: var(--blue); border: 1px solid #3b82f630; }
+.badge-low { background: #10b98120; color: var(--green); border: 1px solid #10b98130; }
+.badge-type { background: #8b5cf620; color: var(--purple); border: 1px solid #8b5cf630; }
+
+/* Severity bars */
+.sev-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.sev-label { font-size: 10px; font-family: 'Space Mono', monospace; color: var(--text2); width: 60px; }
+.sev-track { flex: 1; background: var(--bg3); border-radius: 3px; height: 6px; overflow: hidden; }
+.sev-fill { height: 100%; border-radius: 3px; transition: width 0.8s ease; }
+.sev-count { font-size: 11px; font-weight: 700; font-family: 'Space Mono', monospace; width: 30px; text-align: right; }
+
+/* Detector breakdown */
+.det-item { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.det-name { font-size: 10px; font-family: 'Space Mono', monospace; color: var(--text2); flex: 1; }
+.det-bar-wrap { width: 80px; background: var(--bg3); border-radius: 3px; height: 5px; overflow: hidden; }
+.det-bar { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--purple), var(--blue)); transition: width 0.8s ease; }
+.det-count { font-size: 10px; font-weight: 700; font-family: 'Space Mono', monospace; color: var(--text); width: 28px; text-align: right; }
+
+/* Status indicator */
+.status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.status-idle { background: var(--text3); }
+.status-running { background: var(--blue); animation: pulse 1s infinite; }
+.status-done { background: var(--green); }
+.status-error { background: var(--red); }
+.status-label { font-size: 12px; font-weight: 700; }
+.status-detail { font-size: 10px; color: var(--text3); font-family: 'Space Mono', monospace; }
+
+/* Second row */
+.bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media(max-width:700px) { .bottom-grid { grid-template-columns: 1fr; } }
+
+/* Scrollable findings */
+.findings-scroll { max-height: 280px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+/* Empty state */
+.empty { text-align: center; padding: 40px 20px; color: var(--text3); font-family: 'Space Mono', monospace; font-size: 11px; }
+.empty-icon { font-size: 32px; margin-bottom: 10px; }
+
+/* Scan type tabs */
+.scan-tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+.scan-tab {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: 'Space Mono', monospace;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text3);
+  transition: all 0.2s;
+}
+.scan-tab.active { background: var(--blue); color: white; border-color: var(--blue); }
+.scan-tab:hover:not(.active) { border-color: var(--blue); color: var(--blue); }
+
+/* Animated counter */
+@keyframes countUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.count-anim { animation: countUp 0.3s ease; }
+
+/* Scan history */
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.history-item:last-child { border-bottom: none; }
+.history-icon { font-size: 16px; }
+.history-info { flex: 1; }
+.history-target { font-family: 'Space Mono', monospace; font-size: 10px; color: var(--text2); }
+.history-meta { font-size: 9px; color: var(--text3); font-family: 'Space Mono', monospace; margin-top: 2px; }
+.history-count { font-weight: 800; font-size: 14px; }
+
+/* Tooltip-like masked value */
+.masked-val {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: 'Space Mono', monospace;
+  font-size: 9px;
+  color: var(--purple);
+  display: inline-block;
+  margin: 1px 2px;
+}
+
+.separator { height: 1px; background: var(--border); margin: 16px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <div class="logo">🛡</div>
+      <div>
+        <div class="header-title">KnightGuard PII Scanner</div>
+        <div class="header-sub">BYTEKNIGHT SECURITY · LIVE DASHBOARD</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="live-badge"><div class="live-dot"></div>LIVE</div>
+      <div class="last-update" id="lastUpdate">—</div>
+    </div>
+  </div>
+
+  <!-- Config -->
+  <div class="config-bar">
+    <div class="config-group">
+      <div class="config-label">Server URL</div>
+      <input class="config-input" id="serverUrl" type="text" placeholder="https://uat-api.knightguardgrc.com" value="https://uat-api.knightguardgrc.com"/>
+    </div>
+    <div class="config-group">
+      <div class="config-label">API Key</div>
+      <input class="config-input" id="apiKey" type="password" placeholder="Your agent API key"/>
+    </div>
+    <div class="config-group" style="max-width:220px">
+      <div class="config-label">Scan Target</div>
+      <input class="config-input" id="scanTarget" type="text" placeholder="oracle://user:pass@host/db"/>
+    </div>
+    <div class="config-group" style="max-width:100px">
+      <div class="config-label">Threads</div>
+      <input class="config-input" id="threads" type="number" value="20" min="1" max="50"/>
+    </div>
+    <button class="btn btn-primary" id="startScanBtn" onclick="startScan()">▶ Start Scan</button>
+    <button class="btn btn-secondary" onclick="testConnection()">⚡ Test</button>
+    <button class="btn btn-danger" id="stopBtn" onclick="stopScan()" style="display:none">■ Stop</button>
+  </div>
+
+  <!-- KPI Row -->
+  <div class="kpi-grid">
+    <div class="kpi" style="--accent: var(--blue)">
+      <div class="kpi-label">Tables Scanned</div>
+      <div class="kpi-value" id="kpiTables">0</div>
+      <div class="kpi-sub" id="kpiTablesOf">of 0 total</div>
+    </div>
+    <div class="kpi" style="--accent: var(--purple)">
+      <div class="kpi-label">PII Findings</div>
+      <div class="kpi-value" id="kpiFindings">0</div>
+      <div class="kpi-sub" id="kpiTypes">0 types detected</div>
+    </div>
+    <div class="kpi" style="--accent: var(--red)">
+      <div class="kpi-label">Critical</div>
+      <div class="kpi-value" id="kpiCritical">0</div>
+      <div class="kpi-sub">Immediate action</div>
+    </div>
+    <div class="kpi" style="--accent: var(--green)">
+      <div class="kpi-label">Scan Speed</div>
+      <div class="kpi-value" id="kpiSpeed">0</div>
+      <div class="kpi-sub">tables/sec</div>
+    </div>
+    <div class="kpi" style="--accent: var(--orange)">
+      <div class="kpi-label">ETA</div>
+      <div class="kpi-value" id="kpiEta" style="font-size:20px">—</div>
+      <div class="kpi-sub">time remaining</div>
+    </div>
+    <div class="kpi" style="--accent: var(--cyan)">
+      <div class="kpi-label">DPDP SPDI</div>
+      <div class="kpi-value" id="kpiSpdi">0</div>
+      <div class="kpi-sub">Sensitive data</div>
+    </div>
+  </div>
+
+  <!-- Main Grid -->
+  <div class="main-grid">
+    <!-- Left: Terminal + Progress -->
+    <div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header">
+          <span class="card-title">⬛ Scan Progress</span>
+          <span id="scanStatusBadge" style="font-size:10px;font-family:'Space Mono',monospace;color:var(--text3)">IDLE</span>
+        </div>
+        <div class="card-body">
+          <!-- Status row -->
+          <div class="status-row">
+            <div class="status-dot status-idle" id="statusDot"></div>
+            <div>
+              <div class="status-label" id="statusLabel">Ready to scan</div>
+              <div class="status-detail" id="statusDetail">Configure server and API key above, then click Start Scan</div>
+            </div>
+          </div>
+
+          <!-- Progress bar -->
+          <div class="progress-section">
+            <div class="progress-label">
+              <span id="progressText" style="color:var(--text2)">Tables: 0 / 0</span>
+              <span id="progressPct" style="color:var(--blue);font-weight:700">0%</span>
+            </div>
+            <div class="progress-track">
+              <div class="progress-fill" id="progressBar" style="width:0%"></div>
+            </div>
+          </div>
+
+          <!-- Live terminal -->
+          <div class="card-title" style="margin-bottom:10px">📟 Live Output</div>
+          <div class="terminal" id="terminal">
+            <div class="log-line">
+              <span class="log-time">00:00:00</span>
+              <span class="log-text info">KnightGuard PII Scanner Dashboard ready.</span>
+            </div>
+            <div class="log-line">
+              <span class="log-time">00:00:00</span>
+              <span class="log-text">Enter your server URL and API key, then click Start Scan.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Stats Panel -->
+    <div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header">
+          <span class="card-title">📊 Severity</span>
+        </div>
+        <div class="card-body">
+          <div class="sev-bar">
+            <div class="sev-label" style="color:var(--red)">CRITICAL</div>
+            <div class="sev-track"><div class="sev-fill" id="sevCritical" style="width:0%;background:var(--red)"></div></div>
+            <div class="sev-count" id="sevCriticalN" style="color:var(--red)">0</div>
+          </div>
+          <div class="sev-bar">
+            <div class="sev-label" style="color:var(--orange)">HIGH</div>
+            <div class="sev-track"><div class="sev-fill" id="sevHigh" style="width:0%;background:var(--orange)"></div></div>
+            <div class="sev-count" id="sevHighN" style="color:var(--orange)">0</div>
+          </div>
+          <div class="sev-bar">
+            <div class="sev-label" style="color:var(--blue)">MEDIUM</div>
+            <div class="sev-track"><div class="sev-fill" id="sevMedium" style="width:0%;background:var(--blue)"></div></div>
+            <div class="sev-count" id="sevMediumN" style="color:var(--blue)">0</div>
+          </div>
+          <div class="sev-bar">
+            <div class="sev-label" style="color:var(--green)">LOW</div>
+            <div class="sev-track"><div class="sev-fill" id="sevLow" style="width:0%;background:var(--green)"></div></div>
+            <div class="sev-count" id="sevLowN" style="color:var(--green)">0</div>
+          </div>
+          <div class="separator"></div>
+          <div class="card-title" style="margin-bottom:12px">🔍 By Detector</div>
+          <div id="detectorList"><div class="empty" style="padding:20px 0"><div style="font-size:20px;margin-bottom:6px">📭</div>No findings yet</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">📡 Agent Info</span></div>
+        <div class="card-body" style="font-family:'Space Mono',monospace;font-size:10px;line-height:2">
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Host</span><span id="agentHost">—</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">IP</span><span id="agentIp">—</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Platform</span><span id="agentPlatform">—</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Version</span><span id="agentVersion">—</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Started</span><span id="scanStarted">—</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Elapsed</span><span id="scanElapsed">—</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom: Findings Table + History -->
+  <div class="bottom-grid">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">🔎 Live Findings</span>
+        <span id="findingsCount" style="font-size:10px;font-family:'Space Mono',monospace;color:var(--text3)">0 records</span>
+      </div>
+      <div class="card-body" style="padding:0">
+        <div class="findings-scroll">
+          <table class="findings-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Type</th>
+                <th>Table</th>
+                <th>Column</th>
+                <th>Severity</th>
+                <th>Samples</th>
+              </tr>
+            </thead>
+            <tbody id="findingsBody">
+              <tr><td colspan="6"><div class="empty"><div class="empty-icon">🔍</div>Scan results will appear here in real-time</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">📋 Scan History</span>
+        <button class="btn btn-secondary" style="padding:4px 10px;font-size:10px" onclick="clearHistory()">Clear</button>
+      </div>
+      <div class="card-body">
+        <div id="historyList"><div class="empty"><div class="empty-icon">📂</div>No scan history yet</div></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────
+const state = {
+  scanning: false,
+  paused: false,
+  startTime: null,
+  tables: 0,
+  totalTables: 0,
+  findings: [],
+  detectors: {},
+  severity: { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 },
+  spdi: 0,
+  scanTarget: '',
+  timerInterval: null,
+  pollInterval: null,
+  scanId: null,
+  history: JSON.parse(localStorage.getItem('kg_scan_history') || '[]'),
+};
+
+// ── Helpers ────────────────────────────────────────────────────
+function ts() {
+  return new Date().toTimeString().slice(0, 8);
+}
+
+function fmt(n) {
+  return n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n);
+}
+
+function log(msg, type = '') {
+  const terminal = document.getElementById('terminal');
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.innerHTML = `<span class="log-time">${ts()}</span><span class="log-text ${type}">${msg}</span>`;
+  terminal.appendChild(line);
+  terminal.scrollTop = terminal.scrollHeight;
+  // Keep max 200 lines
+  while (terminal.children.length > 200) terminal.removeChild(terminal.firstChild);
+}
+
+function setKpi(id, val, animate = true) {
+  const el = document.getElementById(id);
+  if (el && el.textContent !== String(val)) {
+    el.textContent = val;
+    if (animate) { el.classList.remove('count-anim'); void el.offsetWidth; el.classList.add('count-anim'); }
+  }
+}
+
+function updateSevBars() {
+  const sev = state.severity;
+  const max = Math.max(...Object.values(sev), 1);
+  for (const [k, v] of Object.entries(sev)) {
+    const key = k.charAt(0) + k.slice(1).toLowerCase();
+    const bar = document.getElementById('sev' + key);
+    const num = document.getElementById('sev' + key + 'N');
+    if (bar) bar.style.width = Math.round((v / max) * 100) + '%';
+    if (num) num.textContent = v;
+  }
+}
+
+function updateDetectors() {
+  const det = state.detectors;
+  const entries = Object.entries(det).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) return;
+  const max = entries[0][1];
+  const html = entries.map(([k, v]) =>
+    `<div class="det-item">
+      <div class="det-name">${k}</div>
+      <div class="det-bar-wrap"><div class="det-bar" style="width:${Math.round(v/max*100)}%"></div></div>
+      <div class="det-count">${v}</div>
+    </div>`
+  ).join('');
+  document.getElementById('detectorList').innerHTML = html;
+}
+
+function addFinding(f, idx) {
+  const tbody = document.getElementById('findingsBody');
+  // Remove empty state
+  if (tbody.querySelector('.empty')) tbody.innerHTML = '';
+
+  const badgeClass = {CRITICAL:'badge-critical',HIGH:'badge-high',MEDIUM:'badge-medium',LOW:'badge-low'}[f.sensitivity] || 'badge-low';
+  const samples = (f.masked_values || f.sample_values || []).slice(0, 5)
+    .map(s => `<span class="masked-val">${s}</span>`).join('');
+
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td style="color:var(--text3)">${idx}</td>
+    <td><span class="badge badge-type">${(f.detector || f.detector_name || '?').toUpperCase()}</span></td>
+    <td style="font-family:'Space Mono',monospace;font-size:9px;color:var(--text2)">${(f.table_name || '—').split('.').pop()}</td>
+    <td style="font-family:'Space Mono',monospace;font-size:9px;color:var(--purple)">${f.column_name || '—'}</td>
+    <td><span class="badge ${badgeClass}">${f.sensitivity || 'LOW'}</span></td>
+    <td>${samples || '<span style="color:var(--text3);font-size:9px">—</span>'}</td>
+  `;
+  tbody.insertBefore(tr, tbody.firstChild);
+  // Keep max 100 rows
+  while (tbody.children.length > 100) tbody.removeChild(tbody.lastChild);
+  document.getElementById('findingsCount').textContent = state.findings.length + ' records';
+}
+
+function setStatus(label, detail, dotClass, badge) {
+  document.getElementById('statusLabel').textContent = label;
+  document.getElementById('statusDetail').textContent = detail;
+  const dot = document.getElementById('statusDot');
+  dot.className = 'status-dot ' + dotClass;
+  document.getElementById('scanStatusBadge').textContent = badge;
+}
+
+function updateProgress(done, total) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressText').textContent = `Tables: ${fmt(done)} / ${fmt(total)}`;
+  document.getElementById('progressPct').textContent = pct + '%';
+  setKpi('kpiTables', fmt(done));
+  document.getElementById('kpiTablesOf').textContent = `of ${fmt(total)} total`;
+}
+
+function startTimer() {
+  state.timerInterval = setInterval(() => {
+    if (!state.startTime) return;
+    const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
+    const h = Math.floor(elapsed / 3600);
+    const m = Math.floor((elapsed % 3600) / 60);
+    const s = elapsed % 60;
+    const str = h > 0 ? `${h}h ${m}m ${s}s` : m > 0 ? `${m}m ${s}s` : `${s}s`;
+    document.getElementById('scanElapsed').textContent = str;
+    document.getElementById('lastUpdate').textContent = 'Updated ' + ts();
+  }, 1000);
+}
+
+// ── Connection test ────────────────────────────────────────────
+async function testConnection() {
+  const server = document.getElementById('serverUrl').value.trim();
+  const apiKey = document.getElementById('apiKey').value.trim();
+  if (!server) { log('Enter server URL first', 'error'); return; }
+  log(`Testing connection to ${server}...`, 'info');
+  try {
+    const r = await fetch(server + '/api/v1/health');
+    const data = await r.json();
+    if (data.status === 'ok') {
+      log('✓ Server connected — ' + JSON.stringify(data), 'success');
+    } else {
+      log('Server responded but status unknown: ' + JSON.stringify(data), 'warn');
+    }
+  } catch (e) {
+    log('✗ Connection failed: ' + e.message, 'error');
+  }
+}
+
+// ── Load existing scans from server ───────────────────────────
+async function loadScans() {
+  const server = document.getElementById('serverUrl').value.trim();
+  const apiKey = document.getElementById('apiKey').value.trim();
+  if (!server || !apiKey) return;
+  try {
+    // Try to load recent scans via the platform API
+    const r = await fetch(server.replace('-api.', '.').replace('/api','') + '/api/v1/pii-scanner/scans', {
+      headers: { 'x-api-key': apiKey }
+    });
+    if (r.ok) {
+      const scans = await r.json();
+      if (Array.isArray(scans) && scans.length > 0) {
+        log(`Loaded ${scans.length} recent scans from platform`, 'info');
+        renderHistory(scans.slice(0, 10));
+      }
+    }
+  } catch(e) {}
+}
+
+function renderHistory(scans) {
+  const list = document.getElementById('historyList');
+  if (!scans.length) { list.innerHTML = '<div class="empty"><div class="empty-icon">📂</div>No scan history yet</div>'; return; }
+  list.innerHTML = scans.map(s => {
+    const icon = s.total_findings > 0 ? (s.critical_findings > 0 ? '🔴' : '🟡') : '🟢';
+    const target = (s.target || '—').replace(/:[^@]+@/, ':***@');
+    const dt = s.started_at ? new Date(s.started_at).toLocaleString('en-IN', {dateStyle:'short', timeStyle:'short'}) : '—';
+    return `<div class="history-item">
+      <div class="history-icon">${icon}</div>
+      <div class="history-info">
+        <div class="history-target">${target}</div>
+        <div class="history-meta">${s.scan_type?.toUpperCase()} · ${dt} · ${s.agent_name || '—'}</div>
+      </div>
+      <div class="history-count" style="color:${s.critical_findings > 0 ? 'var(--red)' : s.total_findings > 0 ? 'var(--orange)' : 'var(--green)'}">${s.total_findings || 0}</div>
+    </div>`;
+  }).join('');
+}
+
+function clearHistory() {
+  state.history = [];
+  localStorage.setItem('kg_scan_history', '[]');
+  document.getElementById('historyList').innerHTML = '<div class="empty"><div class="empty-icon">📂</div>No scan history yet</div>';
+}
+
+// ── Simulate scan (polls local JSON file if available) ─────────
+// In real deployment this would call actual agent API
+// For now: parse the JSON output file the agent creates
+
+let scanInterval = null;
+let simulationStep = 0;
+
+async function startScan() {
+  const server = document.getElementById('serverUrl').value.trim();
+  const apiKey = document.getElementById('apiKey').value.trim();
+  const target = document.getElementById('scanTarget').value.trim();
+  const threads = parseInt(document.getElementById('threads').value) || 20;
+
+  if (!server) { log('Enter server URL', 'error'); return; }
+  if (!apiKey) { log('Enter API key', 'error'); return; }
+
+  // Reset state
+  state.scanning = true;
+  state.startTime = Date.now();
+  state.findings = [];
+  state.detectors = {};
+  state.severity = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+  state.spdi = 0;
+  state.tables = 0;
+  state.totalTables = 0;
+
+  document.getElementById('startScanBtn').disabled = true;
+  document.getElementById('stopBtn').style.display = '';
+  document.getElementById('findingsBody').innerHTML = '';
+  document.getElementById('scanStarted').textContent = new Date().toLocaleTimeString();
+  document.getElementById('agentHost').textContent = window.location.hostname || 'localhost';
+  document.getElementById('agentPlatform').textContent = navigator.platform;
+  document.getElementById('agentVersion').textContent = 'v2.1.0';
+
+  setStatus('Scanning...', target || 'Database scan in progress', 'status-running', 'RUNNING');
+  log('═══════════════════════════════════════', 'heading');
+  log('▶ SCAN STARTED', 'heading');
+  log(`Target : ${target || '(from config)'}`, 'info');
+  log(`Server : ${server}`, 'info');
+  log(`Threads: ${threads}`, 'info');
+  log('═══════════════════════════════════════', 'heading');
+
+  startTimer();
+
+  // Send heartbeat to server
+  try {
+    const hb = await fetch(server + '/api/v1/pii-scanner/heartbeat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+      body: JSON.stringify({ hostname: window.location.hostname, ip_address: '', platform: 'Browser', version: '2.1.0', status: 'online' })
+    });
+    if (hb.ok) log('✓ Heartbeat sent — agent online in dashboard', 'success');
+  } catch(e) { log('⚠ Heartbeat failed: ' + e.message, 'warn'); }
+
+  // Poll for scan completion by checking the platform API for new scans
+  log('Waiting for scan results from agent...', 'info');
+  log('(Run the agent on your machine with the same API key)', 'info');
+  log('pii-scanner scan-db --db "' + (target || 'oracle://...') + '" --threads ' + threads, 'info');
+
+  // Poll the platform every 5 seconds for new scan results
+  state.pollInterval = setInterval(() => pollForResults(server, apiKey), 5000);
+}
+
+async function pollForResults(server, apiKey) {
+  try {
+    const r = await fetch(server + '/api/v1/pii-scanner/scans', {
+      headers: { 'x-api-key': apiKey }
+    });
+    if (!r.ok) return;
+    const scans = await r.json();
+    if (!Array.isArray(scans) || !scans.length) return;
+
+    const latest = scans[0];
+    if (!latest || !latest.id) return;
+
+    // Update progress simulation
+    if (latest.total_findings > 0 && latest.status === 'completed') {
+      // Load findings for this scan
+      if (state.scanId !== latest.id) {
+        state.scanId = latest.id;
+        await loadScanFindings(server, apiKey, latest);
+      }
+    }
+
+    // Update history
+    renderHistory(scans.slice(0, 8));
+
+  } catch(e) {}
+}
+
+async function loadScanFindings(server, apiKey, scan) {
+  log('═══════════════════════════════════════', 'heading');
+  log('✓ SCAN COMPLETED — Loading results...', 'success');
+  log(`Target  : ${scan.target}`, 'info');
+  log(`Findings: ${scan.total_findings}`, 'pii');
+  log(`Critical: ${scan.critical_findings}`, scan.critical_findings > 0 ? 'error' : '');
+  log(`Agent   : ${scan.agent_name}`, 'info');
+
+  // Update KPIs from scan
+  setKpi('kpiFindings', scan.total_findings || 0);
+  setKpi('kpiCritical', scan.critical_findings || 0);
+  setKpi('kpiSpdi', scan.dpdp_spdi_findings || 0);
+
+  // Try to load individual findings
+  try {
+    const r = await fetch(server + '/api/v1/pii-scanner/findings', {
+      headers: { 'x-api-key': apiKey }
+    });
+    if (r.ok) {
+      const data = await r.json();
+      const findings = Array.isArray(data) ? data : (data.findings || []);
+      findings.forEach((f, i) => {
+        state.findings.push(f);
+        const det = (f.detector_name || f.detector || 'Unknown').toUpperCase();
+        state.detectors[det] = (state.detectors[det] || 0) + (f.sample_count || 1);
+        const sev = (f.sensitivity || 'LOW').toUpperCase();
+        if (state.severity[sev] !== undefined) state.severity[sev]++;
+        if (f.is_dpdp_spdi) state.spdi++;
+        addFinding(f, i + 1);
+        if (i < 20) log(`PII: ${det} in ${(f.table_name||'').split('.').pop()}.${f.column_name} — ${f.sample_count} records`, 'pii');
+      });
+      updateSevBars();
+      updateDetectors();
+      setKpi('kpiFindings', findings.length);
+      setKpi('kpiSpdi', state.spdi);
+      const types = Object.keys(state.detectors).length;
+      document.getElementById('kpiTypes').textContent = types + ' types detected';
+    }
+  } catch(e) {
+    log('Could not load individual findings: ' + e.message, 'warn');
+  }
+
+  setStatus('Scan Complete', `Found ${scan.total_findings} PII records`, 'status-done', 'COMPLETE');
+  updateProgress(scan.total_findings, scan.total_findings);
+
+  if (state.severity.CRITICAL > 0) {
+    log('⚠ CRITICAL PII found — immediate action required!', 'error');
+  }
+  log('═══════════════════════════════════════', 'heading');
+  log(`DPDP SPDI: ${state.spdi} sensitive personal data items`, state.spdi > 0 ? 'warn' : '');
+  log('Report available in KnightGuard GRC platform', 'success');
+}
+
+function stopScan() {
+  state.scanning = false;
+  clearInterval(state.timerInterval);
+  clearInterval(state.pollInterval);
+  document.getElementById('startScanBtn').disabled = false;
+  document.getElementById('stopBtn').style.display = 'none';
+  setStatus('Stopped', 'Scan was stopped manually', 'status-idle', 'STOPPED');
+  log('■ Scan monitoring stopped', 'warn');
+}
+
+// ── Parse pasted JSON output ───────────────────────────────────
+function parseJsonOutput(json) {
+  try {
+    const data = JSON.parse(json);
+    const findings = data.findings || [];
+    log(`Loaded ${findings.length} findings from JSON`, 'success');
+    findings.forEach((f, i) => {
+      state.findings.push(f);
+      const det = (f.detector || f.detector_name || 'Unknown').toUpperCase();
+      state.detectors[det] = (state.detectors[det] || 0) + (f.sample_count || 1);
+      const sev = (f.sensitivity || 'LOW').toUpperCase();
+      if (state.severity[sev] !== undefined) state.severity[sev]++;
+      if (f.dpdp_spdi || f.is_dpdp_spdi) state.spdi++;
+      addFinding(f, i + 1);
+    });
+    setKpi('kpiFindings', findings.length);
+    setKpi('kpiCritical', state.severity.CRITICAL);
+    setKpi('kpiSpdi', state.spdi);
+    updateSevBars();
+    updateDetectors();
+    setStatus('Loaded from file', findings.length + ' findings', 'status-done', 'LOADED');
+  } catch(e) {
+    log('Failed to parse JSON: ' + e.message, 'error');
+  }
+}
+
+// Allow dropping JSON file
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (!file || !file.name.endsWith('.json')) { log('Drop a .json scan results file', 'warn'); return; }
+  log(`Loading ${file.name}...`, 'info');
+  const reader = new FileReader();
+  reader.onload = ev => parseJsonOutput(ev.target.result);
+  reader.readAsText(file);
+  log('(You can also drag & drop a pii_scan_*.json file onto this window)', 'info');
+});
+
+// Load scans on startup
+window.addEventListener('load', () => {
+  log('💡 Tip: Drag & drop a pii_scan_*.json file here to load results instantly', 'info');
+  log('💡 Tip: Enter server URL + API key and click Test to verify connection', 'info');
+  renderHistory(state.history);
+});
+</script>
+</body>
+</html>
