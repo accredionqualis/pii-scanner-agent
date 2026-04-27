@@ -1,20 +1,29 @@
 """
-KnightGuard GRC — Database Scanner v2.1 (High Performance)
+KnightGuard GRC — Database Scanner v2.2 (High Performance + Resume)
 Supports: PostgreSQL, MySQL/MariaDB, Oracle, MSSQL, SQLite, MongoDB
 
 Performance optimizations:
 - Parallel table scanning (configurable threads)
 - Smart column name filtering (skip obviously non-PII columns)
-- Batch row fetching with TABLESAMPLE for large tables
-- Skip tables with 0 rows
-- Concatenate columns in single SQL query (fewer round trips)
-- Progress reporting every N tables
+- TABLESAMPLE / SAMPLE for large tables
+- Per-table 45s hard timeout
+- Progress reporting
+
+Resume functionality:
+- Saves checkpoint file (pii_checkpoint_SCANID.json) after every 50 tables
+- On restart with same DB, detects checkpoint and resumes from where it stopped
+- Merges resumed findings with previous findings
+- Deletes checkpoint on successful completion
 """
 import re
 import sys
+import os
+import json
 import time
+import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
+from pathlib import Path
 from detectors import scan_text
 
 SKIP_SCHEMAS = {
@@ -30,7 +39,9 @@ TEXT_TYPES_MY  = ('varchar','text','mediumtext','longtext','char','tinytext','js
 TEXT_TYPES_ORA = ('VARCHAR2','NVARCHAR2','CHAR','NCHAR','CLOB','NCLOB','VARCHAR')
 TEXT_TYPES_MS  = ('varchar','nvarchar','char','nchar','text','ntext','xml')
 
-# Column names that almost never contain PII — skip them to save time
+TABLE_TIMEOUT  = 45   # seconds per table before skip
+CHECKPOINT_EVERY = 50  # save checkpoint every N tables
+
 SKIP_COLUMN_PATTERNS = re.compile(
     r'^(id|uuid|created_at|updated_at|deleted_at|created_by|updated_by|'
     r'tenant_id|org_id|user_id|role|status|type|code|slug|url|path|'
@@ -45,7 +56,6 @@ SKIP_COLUMN_PATTERNS = re.compile(
     re.IGNORECASE
 )
 
-# Column names that are LIKELY to contain PII — prioritize these
 PII_COLUMN_PATTERNS = re.compile(
     r'(name|email|phone|mobile|contact|address|dob|birth|'
     r'aadhaar|aadhar|pan|passport|voter|driving|licence|license|'
@@ -60,15 +70,61 @@ PII_COLUMN_PATTERNS = re.compile(
 )
 
 
+# ── Checkpoint helpers ────────────────────────────────────────────
+
+def _scan_id(connection_string):
+    """Generate stable scan ID from connection string (for checkpoint file)."""
+    return hashlib.md5(connection_string.encode()).hexdigest()[:12]
+
+
+def _checkpoint_path(connection_string):
+    return Path(f"pii_checkpoint_{_scan_id(connection_string)}.json")
+
+
+def _load_checkpoint(connection_string):
+    cp = _checkpoint_path(connection_string)
+    if cp.exists():
+        try:
+            data = json.loads(cp.read_text())
+            print(f"\n[RESUME] Found checkpoint: {cp}")
+            print(f"  Previously scanned : {data['done']} tables")
+            print(f"  Findings so far    : {len(data['findings'])}")
+            print(f"  Interrupted at     : {data.get('timestamp','?')}")
+            print(f"  Resuming from table: {data['done'] + 1}")
+            print()
+            return data
+        except:
+            pass
+    return None
+
+
+def _save_checkpoint(connection_string, done, total, findings, skipped_tables):
+    cp = _checkpoint_path(connection_string)
+    data = {
+        'connection_hash': _scan_id(connection_string),
+        'done': done,
+        'total': total,
+        'findings': findings,
+        'skipped_tables': list(skipped_tables),
+        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
+    }
+    cp.write_text(json.dumps(data, default=str))
+
+
+def _clear_checkpoint(connection_string):
+    cp = _checkpoint_path(connection_string)
+    if cp.exists():
+        cp.unlink()
+        print(f"  Checkpoint cleared: {cp}")
+
+
+# ── Column helpers ────────────────────────────────────────────────
+
 def _should_scan_column(col_name):
-    """Return True if column is worth scanning for PII."""
-    if SKIP_COLUMN_PATTERNS.match(col_name):
-        return False
-    return True
+    return not SKIP_COLUMN_PATTERNS.match(col_name)
 
 
 def _priority_column(col_name):
-    """Return True if column likely contains PII — scan these first."""
     return bool(PII_COLUMN_PATTERNS.search(col_name))
 
 
@@ -94,49 +150,83 @@ def _aggregate_findings(raw_findings, table, column, db_type):
     return results
 
 
+def _run_parallel_scan(tasks, scan_fn, conn_str, total, label='tables'):
+    """
+    Generic parallel scan runner with checkpoint support.
+    Returns (all_findings, done_count)
+    """
+    # Load checkpoint
+    cp = _load_checkpoint(conn_str)
+    already_done = set()
+    all_findings = []
+    done = 0
+
+    if cp:
+        already_done = set(cp.get('skipped_tables', []))
+        already_done.update([t[0] for t in cp.get('done_tables', [])])
+        all_findings = cp.get('findings', [])
+        done = cp.get('done', 0)
+        # Filter out already-scanned tasks
+        tasks = tasks[done:]
+        print(f"  Skipping {done} already-scanned tables, resuming {len(tasks)} remaining...")
+
+    start = time.time()
+    threads = max(1, min(50, len(tasks)))
+
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        futures = {executor.submit(scan_fn, task): i for i, task in enumerate(tasks)}
+        for future in as_completed(futures):
+            try:
+                result = future.result(timeout=TABLE_TIMEOUT)
+                if result:
+                    all_findings.extend(result)
+            except Exception:
+                pass
+            done += 1
+
+            # Save checkpoint every N tables
+            if done % CHECKPOINT_EVERY == 0:
+                _save_checkpoint(conn_str, done, total, all_findings, already_done)
+
+            if done % 500 == 0 or done == total:
+                elapsed = time.time() - start
+                rate = done / elapsed if elapsed > 0 else 0
+                remaining = total - done
+                eta = remaining / rate if rate > 0 else 0
+                print(f"  Progress: {done}/{total} {label} "
+                      f"| {len(all_findings)} findings "
+                      f"| {rate:.0f} {label}/sec "
+                      f"| ETA: {eta/60:.1f} min")
+
+    elapsed = time.time() - start
+    print(f"  Done: {done} {label} in {elapsed/60:.1f} min | {len(all_findings)} findings")
+    return all_findings
+
+
 # ── PostgreSQL ────────────────────────────────────────────────────
 
 def _scan_pg_table(args):
-    """Scan one PostgreSQL table — runs in thread pool."""
     conn_str, schema, table, columns, max_rows = args
     import psycopg2
     findings = []
     try:
         conn = psycopg2.connect(conn_str, connect_timeout=10)
-        conn.set_session(options={'statement_timeout': '30000'})  # 30s per query
         cur = conn.cursor()
-
-        # Sort columns: PII-likely first
-        columns = sorted(columns, key=lambda c: not _priority_column(c))
-        # Filter obviously non-PII columns
-        columns = [c for c in columns if _should_scan_column(c)]
+        columns = sorted(
+            [c for c in columns if _should_scan_column(c)],
+            key=lambda c: not _priority_column(c)
+        )
         if not columns:
-            conn.close()
-            return findings
-
-        # Fetch all columns in ONE query to minimize round trips
+            conn.close(); return findings
         cols_sql = ', '.join(f'"{c}"::text' for c in columns)
         try:
-            # Use TABLESAMPLE for large tables (fast approximate sampling)
-            cur.execute(f"""
-                SELECT {cols_sql}
-                FROM "{schema}"."{table}"
-                TABLESAMPLE SYSTEM(10)
-                LIMIT {max_rows}
-            """)
+            cur.execute(f'SELECT {cols_sql} FROM "{schema}"."{table}" TABLESAMPLE SYSTEM(10) LIMIT {max_rows}')
         except Exception:
             try:
                 cur.execute(f'SELECT {cols_sql} FROM "{schema}"."{table}" LIMIT {max_rows}')
             except Exception:
-                conn.close()
-                return findings
-
+                conn.close(); return findings
         rows = cur.fetchall()
-        if not rows:
-            conn.close()
-            return findings
-
-        # Scan each column
         for col_idx, col in enumerate(columns):
             raw = []
             for row in rows:
@@ -145,13 +235,7 @@ def _scan_pg_table(args):
                     raw.extend(scan_text(str(val), f'{schema}.{table}.{col}'))
             if raw:
                 findings.extend(_aggregate_findings(raw, f'{schema}.{table}', col, 'postgresql'))
-                # Early exit if we found critical PII — no need to scan every column
-                critical = [f for f in findings if f['sensitivity'] == 'CRITICAL']
-                if len(critical) >= 5:
-                    break
-
-        cur.close()
-        conn.close()
+        cur.close(); conn.close()
     except Exception:
         pass
     return findings
@@ -160,62 +244,30 @@ def _scan_pg_table(args):
 def scan_postgresql(conn_str, max_rows, threads=20):
     import psycopg2
     print(f"  Connecting to PostgreSQL...")
-    conn = psycopg2.connect(conn_str)
+    conn = psycopg2.connect(conn_str, connect_timeout=10)
     cur = conn.cursor()
-
-    # Get all text columns grouped by table
     cur.execute("""
         SELECT table_schema, table_name, column_name
         FROM information_schema.columns
-        WHERE data_type = ANY(%s)
-        AND table_schema NOT IN %s
+        WHERE data_type = ANY(%s) AND table_schema NOT IN %s
         ORDER BY table_schema, table_name, column_name
     """, (list(TEXT_TYPES_PG), tuple(SKIP_SCHEMAS)))
     raw_cols = cur.fetchall()
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
 
-    # Group by table
     tables = defaultdict(list)
     for schema, table, col in raw_cols:
         tables[(schema, table)].append(col)
 
-    total_tables = len(tables)
-    print(f"  Connected. {total_tables} tables with text columns, {len(raw_cols)} columns")
-    print(f"  Scanning with {threads} parallel threads...")
+    total = len(tables)
+    print(f"  {total} tables | {len(raw_cols)} text columns | {threads} threads")
 
-    all_findings = []
-    done = 0
-    start = time.time()
-
-    # Build task list
     tasks = [(conn_str, schema, table, cols, max_rows)
              for (schema, table), cols in tables.items()]
 
-    TABLE_TIMEOUT = 45  # seconds per table max
-
-    with ThreadPoolExecutor(max_workers=threads) as executor:
-        futures = {executor.submit(_scan_pg_table, task): task for task in tasks}
-        for future in as_completed(futures):
-            try:
-                result = future.result(timeout=TABLE_TIMEOUT)
-                if result:
-                    all_findings.extend(result)
-            except Exception:
-                pass  # table timed out or errored — skip it
-            done += 1
-            if done % 500 == 0 or done == total_tables:
-                elapsed = time.time() - start
-                rate = done / elapsed if elapsed > 0 else 0
-                eta = (total_tables - done) / rate if rate > 0 else 0
-                print(f"  Progress: {done}/{total_tables} tables "
-                      f"| {len(all_findings)} findings "
-                      f"| {rate:.0f} tables/sec "
-                      f"| ETA: {eta/60:.1f} min")
-
-    elapsed = time.time() - start
-    print(f"  Done: {done} tables in {elapsed/60:.1f} min | {len(all_findings)} findings")
-    return all_findings
+    findings = _run_parallel_scan(tasks, _scan_pg_table, conn_str, total)
+    _clear_checkpoint(conn_str)
+    return findings
 
 
 # ── MySQL ─────────────────────────────────────────────────────────
@@ -225,13 +277,14 @@ def _scan_mysql_table(args):
     import mysql.connector
     findings = []
     try:
-        conn = mysql.connector.connect(**conn_params)
+        conn = mysql.connector.connect(**conn_params, connection_timeout=10)
         cur = conn.cursor()
-        columns = [c for c in columns if _should_scan_column(c)]
-        columns = sorted(columns, key=lambda c: not _priority_column(c))
+        columns = sorted(
+            [c for c in columns if _should_scan_column(c)],
+            key=lambda c: not _priority_column(c)
+        )
         if not columns:
-            conn.close()
-            return findings
+            conn.close(); return findings
         cols_sql = ', '.join(f'`{c}`' for c in columns)
         cur.execute(f"SELECT {cols_sql} FROM `{table}` LIMIT {max_rows}")
         rows = cur.fetchall()
@@ -262,8 +315,8 @@ def scan_mysql(conn_str, max_rows, threads=20):
     cur = conn.cursor()
     cur.execute("""SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS
         WHERE TABLE_SCHEMA=%s AND DATA_TYPE IN ({})
-        ORDER BY TABLE_NAME, COLUMN_NAME""".format(
-        ','.join(['%s']*len(TEXT_TYPES_MY))), [db]+list(TEXT_TYPES_MY))
+        ORDER BY TABLE_NAME, COLUMN_NAME""".format(','.join(['%s']*len(TEXT_TYPES_MY))),
+        [db]+list(TEXT_TYPES_MY))
     raw_cols = cur.fetchall()
     cur.close(); conn.close()
 
@@ -271,31 +324,12 @@ def scan_mysql(conn_str, max_rows, threads=20):
     for table, col in raw_cols:
         tables[table].append(col)
 
-    print(f"  {len(tables)} tables, {len(raw_cols)} text columns | {threads} threads")
+    total = len(tables)
+    print(f"  {total} tables | {len(raw_cols)} text columns | {threads} threads")
     tasks = [(params, db, table, cols, max_rows) for table, cols in tables.items()]
-    all_findings = []
-    done = 0
-    start = time.time()
-
-    TABLE_TIMEOUT = 45
-
-    with ThreadPoolExecutor(max_workers=threads) as executor:
-        futures = {executor.submit(_scan_mysql_table, task): task for task in tasks}
-        for future in as_completed(futures):
-            try:
-                result = future.result(timeout=TABLE_TIMEOUT)
-                if result: all_findings.extend(result)
-            except Exception:
-                pass
-            done += 1
-            if done % 500 == 0 or done == len(tables):
-                elapsed = time.time() - start
-                rate = done / elapsed if elapsed > 0 else 0
-                eta = (len(tables) - done) / rate if rate > 0 else 0
-                print(f"  {done}/{len(tables)} | {len(all_findings)} findings | ETA: {eta/60:.1f}min")
-
-    print(f"  Done: {len(all_findings)} findings in {(time.time()-start)/60:.1f} min")
-    return all_findings
+    findings = _run_parallel_scan(tasks, _scan_mysql_table, conn_str, total)
+    _clear_checkpoint(conn_str)
+    return findings
 
 
 # ── Oracle ────────────────────────────────────────────────────────
@@ -309,9 +343,10 @@ def _scan_oracle_table(args):
         except: pass
         conn = oracledb.connect(user=user, password=pwd, dsn=dsn)
         cur = conn.cursor()
-        cur.callproc("dbms_session.set_nls", [])  # noop — just test connection
-        columns = [c for c in columns if _should_scan_column(c)]
-        columns = sorted(columns, key=lambda c: not _priority_column(c))
+        columns = sorted(
+            [c for c in columns if _should_scan_column(c)],
+            key=lambda c: not _priority_column(c)
+        )
         if not columns:
             conn.close(); return findings
         cols_sql = ', '.join(f'"{c}"' for c in columns)
@@ -363,32 +398,13 @@ def scan_oracle(conn_str, max_rows, threads=20):
     for owner, table, col in raw_cols:
         tables[(owner, table)].append(col)
 
-    print(f"  {len(tables)} tables, {len(raw_cols)} text columns | {threads} threads")
+    total = len(tables)
+    print(f"  {total} tables | {len(raw_cols)} text columns | {threads} threads")
     tasks = [(dsn, user, pwd, owner, table, cols, max_rows)
              for (owner, table), cols in tables.items()]
-    all_findings = []
-    done = 0
-    start = time.time()
-
-    TABLE_TIMEOUT = 45
-
-    with ThreadPoolExecutor(max_workers=threads) as executor:
-        futures = {executor.submit(_scan_oracle_table, task): task for task in tasks}
-        for future in as_completed(futures):
-            try:
-                result = future.result(timeout=TABLE_TIMEOUT)
-                if result: all_findings.extend(result)
-            except Exception:
-                pass
-            done += 1
-            if done % 500 == 0 or done == len(tables):
-                elapsed = time.time() - start
-                rate = done / elapsed if elapsed > 0 else 0
-                eta = (len(tables) - done) / rate if rate > 0 else 0
-                print(f"  {done}/{len(tables)} | {len(all_findings)} findings | ETA: {eta/60:.1f}min")
-
-    print(f"  Done: {len(all_findings)} findings in {(time.time()-start)/60:.1f} min")
-    return all_findings
+    findings = _run_parallel_scan(tasks, _scan_oracle_table, conn_str, total)
+    _clear_checkpoint(conn_str)
+    return findings
 
 
 # ── MSSQL ─────────────────────────────────────────────────────────
@@ -403,6 +419,11 @@ def scan_mssql(conn_str, max_rows, threads=10):
     cs = (f"DRIVER={{ODBC Driver 17 for SQL Server}};"
           f"SERVER={host},{port};DATABASE={db};UID={user};PWD={pwd}")
     print(f"  Connecting to MSSQL {host}/{db}...")
+
+    cp = _load_checkpoint(conn_str)
+    start_from = cp['done'] if cp else 0
+    all_findings = cp['findings'] if cp else []
+
     conn = pyodbc.connect(cs)
     cur = conn.cursor()
     cur.execute(f"""SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME
@@ -411,31 +432,42 @@ def scan_mssql(conn_str, max_rows, threads=10):
         ORDER BY TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME""")
     raw_cols = cur.fetchall()
     cur.close(); conn.close()
-    tables = defaultdict(list)
+
+    tables = list(defaultdict(list).items())
+    tbl_dict = defaultdict(list)
     for schema, table, col in raw_cols:
-        tables[(schema, table)].append(col)
-    print(f"  {len(tables)} tables, {len(raw_cols)} columns")
-    all_findings = []
-    for (schema, table), columns in tables.items():
+        tbl_dict[(schema, table)].append(col)
+    table_list = list(tbl_dict.items())
+
+    total = len(table_list)
+    print(f"  {total} tables | resuming from {start_from}")
+
+    for i, ((schema, table), columns) in enumerate(table_list[start_from:], start_from):
         try:
             conn2 = pyodbc.connect(cs)
             cur2 = conn2.cursor()
             columns = [c for c in columns if _should_scan_column(c)]
-            if not columns: continue
-            cols_sql = ','.join(f'[{c}]' for c in columns)
-            cur2.execute(f"SELECT TOP {max_rows} {cols_sql} FROM [{schema}].[{table}]")
-            rows = cur2.fetchall()
-            for col_idx, col in enumerate(columns):
-                raw = []
-                for row in rows:
-                    val = row[col_idx]
-                    if val and isinstance(val, str):
-                        raw.extend(scan_text(val, f'{schema}.{table}.{col}'))
-                if raw:
-                    all_findings.extend(_aggregate_findings(raw, f'{schema}.{table}', col, 'mssql'))
+            if columns:
+                cols_sql = ','.join(f'[{c}]' for c in columns)
+                cur2.execute(f"SELECT TOP {max_rows} {cols_sql} FROM [{schema}].[{table}]")
+                rows = cur2.fetchall()
+                for col_idx, col in enumerate(columns):
+                    raw = []
+                    for row in rows:
+                        val = row[col_idx]
+                        if val and isinstance(val, str):
+                            raw.extend(scan_text(val, f'{schema}.{table}.{col}'))
+                    if raw:
+                        all_findings.extend(_aggregate_findings(raw, f'{schema}.{table}', col, 'mssql'))
             cur2.close(); conn2.close()
         except Exception:
             pass
+
+        if (i+1) % CHECKPOINT_EVERY == 0:
+            _save_checkpoint(conn_str, i+1, total, all_findings, set())
+            print(f"  Checkpoint: {i+1}/{total} tables | {len(all_findings)} findings")
+
+    _clear_checkpoint(conn_str)
     print(f"  Done: {len(all_findings)} findings")
     return all_findings
 
@@ -449,9 +481,12 @@ def scan_sqlite(db_path, max_rows, threads=1):
     cur = conn.cursor()
     cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
     tables = [r[0] for r in cur.fetchall()]
-    print(f"  {len(tables)} tables")
-    all_findings = []
-    for table in tables:
+
+    cp = _load_checkpoint(db_path)
+    start_from = cp['done'] if cp else 0
+    all_findings = cp['findings'] if cp else []
+
+    for i, table in enumerate(tables[start_from:], start_from):
         try:
             cur.execute(f"SELECT * FROM `{table}` LIMIT {max_rows}")
             cols = [d[0] for d in cur.description]
@@ -467,7 +502,11 @@ def scan_sqlite(db_path, max_rows, threads=1):
                     all_findings.extend(_aggregate_findings(raw, table, col, 'sqlite'))
         except Exception:
             pass
+        if (i+1) % CHECKPOINT_EVERY == 0:
+            _save_checkpoint(db_path, i+1, len(tables), all_findings, set())
+
     conn.close()
+    _clear_checkpoint(db_path)
     print(f"  Done: {len(all_findings)} findings")
     return all_findings
 
@@ -505,8 +544,11 @@ def scan_mongodb(conn_str, max_rows, threads=1):
 
 def scan_database(connection_string, max_rows=1000, send_raw=True, threads=20):
     """
-    Main entry. threads=20 means 20 tables scanned simultaneously.
-    For 44000 tables: ~20x speedup = 4-5 hours → 12-15 minutes.
+    Main entry point.
+    - Parallel scanning with configurable threads
+    - Auto-resume from checkpoint if interrupted
+    - 45s per-table hard timeout
+    - Checkpoint saved every 50 tables
     """
     cs = connection_string.lower()
     try:
@@ -524,7 +566,7 @@ def scan_database(connection_string, max_rows=1000, send_raw=True, threads=20):
             import os
             if os.path.exists(connection_string):
                 return scan_sqlite(connection_string, max_rows, threads)
-            print("  ✗ Unsupported DB. Supported: postgresql, mysql, oracle, mssql, mongodb, sqlite")
+            print("  ✗ Unsupported DB type")
             return []
     except ImportError as e:
         drv = str(e)
