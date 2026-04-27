@@ -117,9 +117,33 @@ def cmd_scan_db(args):
     threads = args.threads or 20
     print(f"\n[DB SCAN] {args.db}")
     print(f"  Threads : {threads} parallel")
+    print(f"  Mode    : {'OFFLINE — saving to JSON' if args.offline else 'ONLINE — uploading to platform'}")
+
     findings = scan_database(args.db, max_rows=args.max_rows or 1000, send_raw=True, threads=threads)
+
     print(f"\n[RESULT] {len(findings)} PII findings")
-    _submit_or_save(findings, 'database', args.db, cfg, args.offline)
+
+    # Always save JSON locally first (safety net)
+    fname = save_offline_report('database', args.db, findings)
+    print(f"[SAVED] Local backup → {fname}")
+
+    if args.offline:
+        print(f"  Upload: pii-scanner upload --file {fname}")
+        _print_summary(findings)
+        return
+
+    # Online: upload then optionally delete local file
+    _print_summary(findings)
+    from api_client import PIIAgentClient
+    client = PIIAgentClient(cfg['server_url'], cfg['api_key'])
+    ok, msg = client.submit_findings('database', args.db, findings)
+    if ok:
+        print(f"[OK] Uploaded to KnightGuard GRC platform")
+        # Keep local JSON as audit trail
+        print(f"[INFO] Local backup kept at: {fname}")
+    else:
+        print(f"[WARN] Upload failed ({msg})")
+        print(f"[INFO] Use local backup: pii-scanner upload --file {fname}")
 
 def cmd_scan_files(args):
     from file_scanner import scan_files

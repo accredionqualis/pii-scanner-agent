@@ -102,7 +102,8 @@ def _scan_pg_table(args):
     import psycopg2
     findings = []
     try:
-        conn = psycopg2.connect(conn_str)
+        conn = psycopg2.connect(conn_str, connect_timeout=10)
+        conn.set_session(options={'statement_timeout': '30000'})  # 30s per query
         cur = conn.cursor()
 
         # Sort columns: PII-likely first
@@ -191,12 +192,17 @@ def scan_postgresql(conn_str, max_rows, threads=20):
     tasks = [(conn_str, schema, table, cols, max_rows)
              for (schema, table), cols in tables.items()]
 
+    TABLE_TIMEOUT = 45  # seconds per table max
+
     with ThreadPoolExecutor(max_workers=threads) as executor:
         futures = {executor.submit(_scan_pg_table, task): task for task in tasks}
         for future in as_completed(futures):
-            result = future.result()
-            if result:
-                all_findings.extend(result)
+            try:
+                result = future.result(timeout=TABLE_TIMEOUT)
+                if result:
+                    all_findings.extend(result)
+            except Exception:
+                pass  # table timed out or errored — skip it
             done += 1
             if done % 500 == 0 or done == total_tables:
                 elapsed = time.time() - start
@@ -271,11 +277,16 @@ def scan_mysql(conn_str, max_rows, threads=20):
     done = 0
     start = time.time()
 
+    TABLE_TIMEOUT = 45
+
     with ThreadPoolExecutor(max_workers=threads) as executor:
         futures = {executor.submit(_scan_mysql_table, task): task for task in tasks}
         for future in as_completed(futures):
-            result = future.result()
-            if result: all_findings.extend(result)
+            try:
+                result = future.result(timeout=TABLE_TIMEOUT)
+                if result: all_findings.extend(result)
+            except Exception:
+                pass
             done += 1
             if done % 500 == 0 or done == len(tables):
                 elapsed = time.time() - start
@@ -298,6 +309,7 @@ def _scan_oracle_table(args):
         except: pass
         conn = oracledb.connect(user=user, password=pwd, dsn=dsn)
         cur = conn.cursor()
+        cur.callproc("dbms_session.set_nls", [])  # noop — just test connection
         columns = [c for c in columns if _should_scan_column(c)]
         columns = sorted(columns, key=lambda c: not _priority_column(c))
         if not columns:
@@ -358,11 +370,16 @@ def scan_oracle(conn_str, max_rows, threads=20):
     done = 0
     start = time.time()
 
+    TABLE_TIMEOUT = 45
+
     with ThreadPoolExecutor(max_workers=threads) as executor:
         futures = {executor.submit(_scan_oracle_table, task): task for task in tasks}
         for future in as_completed(futures):
-            result = future.result()
-            if result: all_findings.extend(result)
+            try:
+                result = future.result(timeout=TABLE_TIMEOUT)
+                if result: all_findings.extend(result)
+            except Exception:
+                pass
             done += 1
             if done % 500 == 0 or done == len(tables):
                 elapsed = time.time() - start
