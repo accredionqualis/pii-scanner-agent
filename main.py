@@ -103,7 +103,10 @@ def cmd_status(args):
     if cfg.get('server_url') and cfg.get('api_key'):
         client = PIIAgentClient(cfg['server_url'], cfg['api_key'])
         ok, msg = client.check_activation()
-        if ok is None: print("  Status   : ✓ Connected — ACTIVE")
+        if ok is None:
+            # Send heartbeat so dashboard shows ONLINE
+            client.heartbeat()
+            print("  Status   : ✓ Connected — ACTIVE")
         elif ok is False: print("  Status   : ✗ DEACTIVATED — contact admin")
         else: print(f"  Status   : ✗ Connection failed: {msg}")
 
