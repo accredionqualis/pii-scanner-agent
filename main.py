@@ -114,8 +114,10 @@ def cmd_scan_db(args):
     from db_scanner import scan_database
     cfg = load_config()
     if not args.offline: _check_active(cfg)
+    threads = args.threads or 20
     print(f"\n[DB SCAN] {args.db}")
-    findings = scan_database(args.db, max_rows=args.max_rows or 1000, send_raw=True)
+    print(f"  Threads : {threads} parallel")
+    findings = scan_database(args.db, max_rows=args.max_rows or 1000, send_raw=True, threads=threads)
     print(f"\n[RESULT] {len(findings)} PII findings")
     _submit_or_save(findings, 'database', args.db, cfg, args.offline)
 
@@ -236,6 +238,7 @@ def main():
     p.add_argument('--db', required=True,
         help='postgresql://u:p@h/db | oracle://u:p@h:1521/SID | mysql://u:p@h/db | /path/to.db')
     p.add_argument('--max-rows', type=int, default=1000)
+    p.add_argument('--threads', type=int, default=20, help='Parallel threads (default 20, max 50)')
     p.add_argument('--offline', action='store_true')
     p.set_defaults(func=cmd_scan_db)
 
