@@ -1,71 +1,110 @@
-# SCE GRC PII Scanner Agent v1.0
-## ScudoCyber Solutions Pvt. Ltd.
+# KnightGuard GRC — PII Scanner Agent v2.0
+**ByteKnight Security Pvt. Ltd.** | https://knightguardgrc.com
 
-A lightweight PII detection agent that scans databases, files and networks
-for personally identifiable information and reports findings to the SCE GRC platform.
+## ⬇️ Download
+**[→ Download latest Windows EXE from Releases](../../releases/latest)**
 
-## Supported Detectors (Indian PII Focus)
-- Aadhaar (with Verhoeff checksum validation)
-- PAN Card
-- Passport
-- Mobile Number
-- Email Address
-- GSTIN
-- Voter ID
-- Driving Licence
-- ABHA Health ID
-- Credit/Debit Cards (Luhn validated)
-- IFSC Code
-- IP Address
+No Python or installation required. Download and run directly.
 
-## Installation
+---
 
-### Prerequisites
-- Python 3.8+
-- pip
+## Features
+| Feature | Status |
+|---------|--------|
+| PostgreSQL, MySQL, Oracle, MSSQL, MongoDB, SQLite | ✅ |
+| Full offline scan mode | ✅ |
+| Upload offline results | ✅ |
+| Network endpoint/laptop/desktop scanning | ✅ |
+| Image OCR (Aadhaar/PAN card photos) | ✅ |
+| Agent activate/deactivate by super admin | ✅ |
+| Full raw PII values submitted | ✅ |
 
-### Install dependencies
-pip install -r requirements.txt
+---
 
-## Configuration
-python3 main.py configure --server https://api.scegrc.com --api-key YOUR_API_KEY
+## Quick Start
 
-## Usage
+### 1. Configure
+```cmd
+KnightGuard-PII-Scanner.exe configure --server https://api.knightguardgrc.com --api-key YOUR_KEY
+```
 
-### Test connection
-python3 main.py test
+### 2. Test connection
+```cmd
+KnightGuard-PII-Scanner.exe status
+```
 
-### Scan a MySQL database
-python3 main.py db --type mysql --host 192.168.1.10 --database mydb --username root --password pass
+### 3. Discover databases on network
+```cmd
+KnightGuard-PII-Scanner.exe discover
+KnightGuard-PII-Scanner.exe discover --subnet 192.168.1
+```
 
-### Scan a PostgreSQL database
-python3 main.py db --type postgresql --host 192.168.1.10 --database mydb --username postgres --password pass
+### 4. Scan database
+```cmd
+KnightGuard-PII-Scanner.exe scan-db --db "postgresql://user:pass@192.168.1.10/mydb"
+KnightGuard-PII-Scanner.exe scan-db --db "oracle://user:pass@192.168.1.20:1521/ORCL"
+KnightGuard-PII-Scanner.exe scan-db --db "mysql://user:pass@192.168.1.30/hrdb"
+KnightGuard-PII-Scanner.exe scan-db --db "mssql://user:pass@192.168.1.40/master"
+KnightGuard-PII-Scanner.exe scan-db --db "mongodb://user:pass@192.168.1.50/mydb"
+```
 
-### Scan a MSSQL database
-python3 main.py db --type mssql --host 192.168.1.10 --database mydb --username sa --password pass
+### 5. Scan files (with image OCR)
+```cmd
+KnightGuard-PII-Scanner.exe scan-files --path "C:\Users\Documents"
+KnightGuard-PII-Scanner.exe scan-files --path "D:\Shared" --no-ocr
+```
 
-### Scan an Oracle database
-python3 main.py db --type oracle --host 192.168.1.10 --database ORCL --username system --password pass
+### 6. Scan endpoints/laptops on network
+```cmd
+KnightGuard-PII-Scanner.exe scan-endpoint --targets 192.168.1.50,192.168.1.51
+KnightGuard-PII-Scanner.exe scan-endpoint --targets 192.168.1.50 --smb-user admin --smb-pass Password123
+```
 
-### Scan files/folders
-python3 main.py files --path /var/data
+### 7. Offline mode (air-gapped networks)
+```cmd
+KnightGuard-PII-Scanner.exe scan-db --db "oracle://..." --offline
+KnightGuard-PII-Scanner.exe scan-files --path "C:\Data" --offline
+KnightGuard-PII-Scanner.exe upload --file pii_database_20260427_143022.json
+```
 
-### Discover databases on network
-python3 main.py network --cidr 192.168.1.0/24
+### 8. Background daemon (sends heartbeat)
+```cmd
+KnightGuard-PII-Scanner.exe daemon
+KnightGuard-PII-Scanner.exe daemon --interval 600
+```
 
-## Windows .exe Build
-pip install pyinstaller
-pyinstaller --onefile --name PIIScanner main.py
-# Output: dist/PIIScanner.exe
+---
 
-## DPDP Act 2023 — SPDI Categories
-The following detectors flag data as Sensitive Personal Data (SPDI):
-- Aadhaar Number
-- PAN Card
-- Passport Number
-- Voter ID
-- Driving Licence
-- ABHA Health ID
+## PII Types Detected
+| Type | Severity | DPDP SPDI |
+|------|----------|-----------|
+| Aadhaar | CRITICAL | ✅ |
+| PAN | CRITICAL | ✅ |
+| Passport | CRITICAL | ✅ |
+| ABHA Health ID | CRITICAL | ✅ |
+| Credit/Debit Card | CRITICAL | ✅ |
+| Bank Account | CRITICAL | ✅ |
+| Voter ID | HIGH | ✅ |
+| Driving Licence | HIGH | ✅ |
+| Mobile | MEDIUM | ❌ |
+| GSTIN | MEDIUM | ❌ |
+| Email | LOW | ❌ |
+| IFSC | MEDIUM | ❌ |
+| Date of Birth | MEDIUM | ❌ |
+| IP Address | LOW | ❌ |
 
-## Support
-support@scudocyber.com | https://scegrc.com
+---
+
+## Oracle Read-Only User (run as SYSDBA)
+```sql
+CREATE USER pii_scanner IDENTIFIED BY StrongPass123;
+GRANT CREATE SESSION TO pii_scanner;
+GRANT SELECT ANY TABLE TO pii_scanner;
+GRANT SELECT ANY DICTIONARY TO pii_scanner;
+```
+
+## Oracle Common Service Names
+- `ORCL` — Default
+- `ORCLPDB` — Pluggable DB
+- `XE` — Express Edition
+- `XEPDB1` — XE Pluggable DB

@@ -2,39 +2,91 @@ name: Build Windows EXE
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   build-windows:
     runs-on: windows-latest
+
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install Tesseract OCR
         run: |
-          pip install pyinstaller
-          pip install requests pymysql psycopg2-binary openpyxl
+          choco install tesseract --yes
+          echo "C:\Program Files\Tesseract-OCR" >> $env:GITHUB_PATH
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller psycopg2-binary oracledb mysql-connector-python pymongo pdfplumber pytesseract Pillow requests
 
       - name: Build EXE
         run: |
-          pyinstaller --onefile --name PIIScanner --console main.py
+          python -m PyInstaller `
+            --onefile `
+            --name KnightGuard-PII-Scanner `
+            --clean `
+            --noconfirm `
+            --hidden-import psycopg2 `
+            --hidden-import oracledb `
+            --hidden-import mysql.connector `
+            --hidden-import pymongo `
+            --hidden-import pytesseract `
+            --hidden-import pdfplumber `
+            --hidden-import PIL `
+            main.py
+
+      - name: Verify EXE
+        run: |
+          dir dist\
+          dist\KnightGuard-PII-Scanner.exe --help
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: PIIScanner-Windows
-          path: dist/PIIScanner.exe
+          name: KnightGuard-PII-Scanner-Windows-v2
+          path: dist\KnightGuard-PII-Scanner.exe
+          retention-days: 90
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          files: dist/PIIScanner.exe
+          tag_name: v2.0.${{ github.run_number }}
+          name: "KnightGuard PII Scanner v2.0.${{ github.run_number }}"
+          body: |
+            ## KnightGuard GRC PII Scanner Agent v2.0
+            **ByteKnight Security Pvt. Ltd.**
+
+            ### Features
+            - ✅ All major databases: PostgreSQL, MySQL, Oracle, MSSQL, MongoDB, SQLite
+            - ✅ Full offline mode — scan without internet, upload later
+            - ✅ Network database discovery + endpoint/laptop/desktop scanning
+            - ✅ Image OCR — scan Aadhaar cards, PAN cards in images
+            - ✅ Agent activation/deactivation by super admin
+            - ✅ Full raw PII data sent (not just categories)
+            - ✅ Upload offline scan results anytime
+
+            ### Quick Start
+            ```
+            KnightGuard-PII-Scanner.exe configure --server https://api.knightguardgrc.com --api-key YOUR_KEY
+            KnightGuard-PII-Scanner.exe status
+            KnightGuard-PII-Scanner.exe discover
+            KnightGuard-PII-Scanner.exe scan-db --db "postgresql://user:pass@192.168.1.10/mydb"
+            KnightGuard-PII-Scanner.exe scan-db --db "oracle://user:pass@192.168.1.20:1521/ORCL"
+            KnightGuard-PII-Scanner.exe scan-files --path "C:\Users\Documents"
+            KnightGuard-PII-Scanner.exe scan-endpoint --targets 192.168.1.30,192.168.1.31
+            KnightGuard-PII-Scanner.exe scan-db --db "postgresql://..." --offline
+            KnightGuard-PII-Scanner.exe upload --file pii_database_20260427.json
+            ```
+          files: dist\KnightGuard-PII-Scanner.exe
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

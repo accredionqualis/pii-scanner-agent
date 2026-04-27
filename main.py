@@ -1,417 +1,273 @@
 #!/usr/bin/env python3
 """
-SCE GRC PII Scanner Agent v1.1
-ScudoCyber Solutions Pvt. Ltd.
-
-Supports two modes:
-  ONLINE  — scan and push findings to SCE GRC server immediately
-  OFFLINE — scan in air-gapped environment, save to JSON file,
-             upload later with: pii-scanner upload --file <file>
+KnightGuard GRC — PII Scanner Agent v2.0
+ByteKnight Security Pvt. Ltd.
+https://knightguardgrc.com
 """
-import json
-import os
-import sys
-import argparse
+import json, os, sys, argparse, platform, socket, time
 from datetime import datetime
+from pathlib import Path
 
-CONFIG_FILE = os.path.join(os.path.expanduser('~'), '.pii_agent_config.json')
-AGENT_VERSION = '1.1.0'
-
+CONFIG_FILE = Path.home() / '.knightguard_agent.json'
+AGENT_VERSION = '2.0.0'
+BANNER = """
+╔══════════════════════════════════════════════════════════════╗
+║   KnightGuard GRC — PII Scanner Agent v2.0                  ║
+║   ByteKnight Security Pvt. Ltd. | knightguardgrc.com         ║
+╚══════════════════════════════════════════════════════════════╝
+"""
 
 def load_config():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE) as f:
-            return json.load(f)
+    if CONFIG_FILE.exists():
+        try: return json.loads(CONFIG_FILE.read_text())
+        except: pass
     return {}
 
+def save_config(cfg):
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    CONFIG_FILE.chmod(0o600)
 
-def save_config(config):
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def save_offline_report(scan_type, target, findings, label='scan'):
-    """Save scan results to a local JSON file for later upload."""
-    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    report_file = f"pii_{label}_{ts}.json"
-    payload = {
-        'scan_type': scan_type,
-        'target': target,
-        'findings': findings,
-        'scanned_at': datetime.now().isoformat(),
-        'agent_version': AGENT_VERSION,
-        'offline': True,
-    }
-    with open(report_file, 'w') as f:
-        json.dump(payload, f, indent=2)
-    return report_file
-
-
-def print_findings_summary(findings):
-    by_sens = {}
-    for f in findings:
-        by_sens.setdefault(f['sensitivity'], []).append(f)
-    for sens in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']:
-        if sens in by_sens:
-            print(f"\n  {sens} ({len(by_sens[sens])}):")
-            for f in by_sens[sens][:5]:
-                loc = f"{f['table_name']}.{f['column_name']}" if f.get('table_name') else f.get('file_path', '')
-                spdi = ' [DPDP-SPDI]' if f.get('is_dpdp_spdi') else ''
-                count = f.get('sample_count', 0)
-                print(f"    {f['detector']}: {loc} (~{count:,} records){spdi}")
-    if not by_sens:
-        print("  No PII found.")
-
-
-def submit_to_server(config, scan_type, target, findings):
-    """Try to submit findings to server. Returns (success, scan_id)."""
-    from api_client import PIIAgentClient
+def _get_local_ip():
     try:
-        client = PIIAgentClient(config['server_url'], config['api_key'])
-        result = client.submit_findings(scan_type, target, findings)
-        if result and result.get('scan_id'):
-            return True, result['scan_id']
-        return False, None
-    except Exception as e:
-        print(f"  Submit error: {e}")
-        return False, None
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80)); ip = s.getsockname()[0]; s.close(); return ip
+    except: return socket.gethostbyname(socket.gethostname())
 
+def _ts(): return datetime.now().strftime('%H:%M:%S')
 
-# ── Commands ──────────────────────────────────────────────────────────────────
-
-def configure(args):
-    config = load_config()
-    if args.server:
-        config['server_url'] = args.server
-    if args.api_key:
-        config['api_key'] = args.api_key
-    save_config(config)
-    print(f"Config saved to {CONFIG_FILE}")
-    print(f"  Server:  {config.get('server_url', 'not set')}")
-    print(f"  API Key: {config.get('api_key', 'not set')[:8]}..." if config.get('api_key') else "  API Key: not set")
-
-
-def test_connection(args):
-    config = load_config()
-    if not config.get('server_url') or not config.get('api_key'):
-        print("ERROR: Run 'configure' first")
-        return False
-    from api_client import PIIAgentClient
-    client = PIIAgentClient(config['server_url'], config['api_key'])
-    print(f"Testing connection to {config['server_url']}...")
-    if client.test_connection():
-        print("SUCCESS: Connected and authenticated")
-        return True
-    else:
-        print("FAILED: Could not connect")
-        return False
-
-
-def scan_database(args):
-    config = load_config()
-    from db_scanner import DBScanner
-
-    db_config = {
-        'type': args.type,
-        'host': args.host,
-        'port': args.port,
-        'database': args.database,
-        'username': args.username,
-        'password': args.password,
+def save_offline_report(scan_type, target, findings):
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    fname = f"pii_{scan_type}_{ts}.json"
+    payload = {
+        'scan_type': scan_type, 'target': target,
+        'hostname': socket.gethostname(), 'ip_address': _get_local_ip(),
+        'platform': platform.system(), 'agent_version': AGENT_VERSION,
+        'scanned_at': datetime.now().isoformat(), 'offline': True,
+        'findings': findings, 'total_findings': len(findings),
     }
-    target  = f"{args.host}/{args.database}"
-    offline = getattr(args, 'offline', False)
+    Path(fname).write_text(json.dumps(payload, indent=2, default=str))
+    return fname
 
-    print(f"\n{'='*60}")
-    print(f"SCE GRC PII Scanner v{AGENT_VERSION} — Database Scan")
-    print(f"Target:  {args.type}://{target}")
-    print(f"Mode:    {'OFFLINE — results saved locally for upload later' if offline else 'ONLINE'}")
-    print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{'='*60}\n")
+def _print_summary(findings):
+    if not findings: return
+    from collections import Counter
+    by_sev = Counter(f.get('sensitivity','LOW') for f in findings)
+    by_type = Counter(f.get('detector', f.get('detector_name','?')) for f in findings)
+    print(f"  Severity : " + " | ".join(f"{k}={v}" for k,v in sorted(by_sev.items())))
+    print(f"  Top types: " + ", ".join(f"{k}={v}" for k,v in by_type.most_common(5)))
 
-    scanner  = DBScanner(db_config)
-    findings = scanner.scan(lambda msg: print(f"  → {msg}"))
-
-    print(f"\n{'='*60}")
-    print(f"SCAN COMPLETE — {len(findings)} findings")
-    print(f"{'='*60}")
-    print_findings_summary(findings)
-
-    # Always save a local JSON (audit trail + offline fallback)
-    report_file = save_offline_report('database', target, findings, 'db')
-    print(f"\n  Local report saved: {report_file}")
-
-    if offline:
-        print(f"\n  OFFLINE MODE — Findings NOT submitted to server.")
-        print(f"  When your laptop is back online, run:")
-        print(f"    pii-scanner upload --file {report_file}")
-    elif config.get('server_url') and config.get('api_key'):
-        print(f"\n  Submitting to SCE GRC server...")
-        ok, scan_id = submit_to_server(config, 'database', target, findings)
-        if ok:
-            print(f"  SUCCESS: Scan ID {scan_id}")
-            dashboard = config['server_url'].replace('api.', '').replace('-api.', '.').rstrip('/')
-            print(f"  Dashboard: {dashboard}/privacy/pii-scanner")
-        else:
-            print(f"  WARNING: Server unreachable. Run when connected:")
-            print(f"    pii-scanner upload --file {report_file}")
-    else:
-        print("\n  Note: Run 'pii-scanner configure' to set server connection.")
-        print(f"  Then upload: pii-scanner upload --file {report_file}")
-
-
-def scan_files(args):
-    config  = load_config()
-    offline = getattr(args, 'offline', False)
-    from file_scanner import FileScanner
-
-    print(f"\n{'='*60}")
-    print(f"SCE GRC PII Scanner v{AGENT_VERSION} — File Scan")
-    print(f"Path:    {args.path}")
-    print(f"Mode:    {'OFFLINE — results saved locally for upload later' if offline else 'ONLINE'}")
-    print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{'='*60}\n")
-
-    scanner  = FileScanner(args.path)
-    findings = scanner.scan(lambda msg: print(f"  → {msg}"))
-
-    print(f"\n{'='*60}")
-    print(f"SCAN COMPLETE — {len(findings)} findings")
-    print(f"{'='*60}")
-    print_findings_summary(findings)
-
-    report_file = save_offline_report('file', args.path, findings, 'files')
-    print(f"\n  Local report saved: {report_file}")
-
-    if offline:
-        print(f"\n  OFFLINE MODE — run when connected:")
-        print(f"    pii-scanner upload --file {report_file}")
-    elif config.get('server_url') and config.get('api_key'):
-        print(f"\n  Submitting to SCE GRC server...")
-        ok, scan_id = submit_to_server(config, 'file', args.path, findings)
-        if ok:
-            print(f"  SUCCESS: Scan ID {scan_id}")
-        else:
-            print(f"  WARNING: Server unreachable.")
-            print(f"    pii-scanner upload --file {report_file}")
-
-
-def upload_report(args):
-    """
-    Upload a previously saved offline scan JSON to the SCE GRC server.
-    Works for any scan type (database, file, api).
-    Supports uploading multiple files at once.
-    """
-    config = load_config()
-
-    if not config.get('server_url') or not config.get('api_key'):
-        print("ERROR: Not configured. Run: pii-scanner configure --server URL --api-key KEY")
-        sys.exit(1)
-
-    files = args.file  # list of files
-
-    print(f"\n{'='*60}")
-    print(f"SCE GRC PII Scanner v{AGENT_VERSION} — Upload Offline Scan(s)")
-    print(f"Server: {config['server_url']}")
-    print(f"Files:  {len(files)} to upload")
-    print(f"{'='*60}\n")
-
-    # Test connectivity first
+def _check_active(cfg):
     from api_client import PIIAgentClient
-    client = PIIAgentClient(config['server_url'], config['api_key'])
-    print("  Testing server connection...")
-    if not client.test_connection():
-        print("  ERROR: Cannot reach server. Check internet connection and try again.")
-        sys.exit(1)
-    print("  Connection OK\n")
+    if not cfg.get('server_url') or not cfg.get('api_key'):
+        print("✗ Not configured. Run: pii-scanner configure --server URL --api-key KEY"); sys.exit(1)
+    client = PIIAgentClient(cfg['server_url'], cfg['api_key'])
+    ok, msg = client.check_activation()
+    if ok is False:
+        print("✗ This agent has been DEACTIVATED by your administrator."); sys.exit(1)
 
-    success_count = 0
-    fail_count    = 0
-
-    for file_path in files:
-        if not os.path.exists(file_path):
-            print(f"  ERROR: File not found: {file_path}")
-            fail_count += 1
-            continue
-
-        print(f"  Uploading: {file_path}")
-        try:
-            with open(file_path) as f:
-                payload = json.load(f)
-        except Exception as e:
-            print(f"    ERROR: Could not read file: {e}")
-            fail_count += 1
-            continue
-
-        scan_type = payload.get('scan_type', 'database')
-        target    = payload.get('target', '')
-        findings  = payload.get('findings', [])
-        scanned_at = payload.get('scanned_at', 'unknown')
-
-        print(f"    Scan type:  {scan_type}")
-        print(f"    Target:     {target}")
-        print(f"    Scanned at: {scanned_at}")
-        print(f"    Findings:   {len(findings)}")
-
-        ok, scan_id = submit_to_server(config, scan_type, target, findings)
-        if ok:
-            print(f"    SUCCESS: Scan ID {scan_id}")
-            # Mark file as uploaded so it's not accidentally re-uploaded
-            uploaded_file = file_path.replace('.json', '_uploaded.json')
-            os.rename(file_path, uploaded_file)
-            print(f"    File renamed to: {uploaded_file}")
-            success_count += 1
-        else:
-            print(f"    FAILED: Could not submit. File kept at: {file_path}")
-            fail_count += 1
-
-        print()
-
-    print(f"{'='*60}")
-    print(f"Upload complete: {success_count} succeeded, {fail_count} failed")
-    if success_count > 0:
-        dashboard = config['server_url'].replace('api.', '').replace('-api.', '.').rstrip('/')
-        print(f"View results at: {dashboard}/privacy/pii-scanner")
-    print(f"{'='*60}\n")
-
-
-def scan_network(args):
-    from network_scanner import scan_network as do_scan
-    print(f"\n{'='*60}")
-    print(f"SCE GRC PII Scanner v{AGENT_VERSION} — Network Discovery")
-    print(f"CIDR: {args.cidr}")
-    print(f"{'='*60}\n")
-    results = do_scan(args.cidr, lambda msg: print(f"  → {msg}"))
-    print(f"\nDiscovered {len(results)} database services:")
-    for r in results:
-        print(f"  {r['host']}:{r['port']} — {r['service']}")
-
-
-def scan_api(args):
-    config = load_config()
-    if not config.get('server_url') or not config.get('api_key'):
-        print('Not configured. Run: pii-scanner configure --server URL --api-key KEY')
+def _submit_or_save(findings, scan_type, target, cfg, offline):
+    _print_summary(findings)
+    if offline or not findings:
+        fname = save_offline_report(scan_type, target, findings)
+        print(f"\n[SAVED] → {fname}")
+        if offline: print(f"  Upload: pii-scanner upload --file {fname}")
         return
-
-    offline   = getattr(args, 'offline', False)
-    endpoints = [e.strip() for e in args.endpoints.split(',') if e.strip()]
-    headers   = {}
-    if args.token:
-        headers['Authorization'] = args.token if args.token.startswith('Bearer') else f'Bearer {args.token}'
-    if args.header:
-        for h in args.header:
-            k, v = h.split(':', 1)
-            headers[k.strip()] = v.strip()
-
-    from api_scanner import scan_api_endpoints
-    findings, results = scan_api_endpoints(args.url, endpoints, headers=headers)
-
-    print(f"\nAPI scan complete — {len(findings)} findings")
-    print_findings_summary(findings)
-
-    report_file = save_offline_report('api', args.url, findings, 'api')
-    print(f"\n  Local report saved: {report_file}")
-
-    if offline:
-        print(f"\n  OFFLINE MODE — run when connected:")
-        print(f"    pii-scanner upload --file {report_file}")
-    elif findings:
-        ok, scan_id = submit_to_server(config, 'api', args.url, findings)
-        if ok:
-            print(f"  SUCCESS: Scan ID {scan_id}")
-        else:
-            print(f"  WARNING: pii-scanner upload --file {report_file}")
+    from api_client import PIIAgentClient
+    client = PIIAgentClient(cfg['server_url'], cfg['api_key'])
+    ok, msg = client.submit_findings(scan_type, target, findings)
+    if ok: print(f"\n[OK] Submitted to KnightGuard GRC platform")
     else:
-        print('  No PII found in API responses')
+        fname = save_offline_report(scan_type, target, findings)
+        print(f"\n[WARN] Submit failed ({msg}) — saved to {fname}")
 
+# ── COMMANDS ──────────────────────────────────────────────────────
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+def cmd_configure(args):
+    cfg = load_config()
+    cfg['server_url'] = args.server.rstrip('/')
+    cfg['api_key'] = args.api_key
+    save_config(cfg)
+    print(f"✓ Saved to {CONFIG_FILE}")
+    print(f"  Server : {cfg['server_url']}")
+    print(f"  Key    : {cfg['api_key'][:8]}...")
+
+def cmd_status(args):
+    from api_client import PIIAgentClient
+    cfg = load_config()
+    ip = _get_local_ip()
+    print(f"  Host     : {socket.gethostname()} ({ip})")
+    print(f"  OS       : {platform.system()} {platform.release()}")
+    print(f"  Version  : {AGENT_VERSION}")
+    print(f"  Server   : {cfg.get('server_url','⚠ not configured')}")
+    print(f"  API Key  : {cfg['api_key'][:8]}..." if cfg.get('api_key') else "  API Key  : ⚠ not configured")
+    if cfg.get('server_url') and cfg.get('api_key'):
+        client = PIIAgentClient(cfg['server_url'], cfg['api_key'])
+        ok, msg = client.check_activation()
+        if ok is None: print("  Status   : ✓ Connected — ACTIVE")
+        elif ok is False: print("  Status   : ✗ DEACTIVATED — contact admin")
+        else: print(f"  Status   : ✗ Connection failed: {msg}")
+
+def cmd_scan_db(args):
+    from db_scanner import scan_database
+    cfg = load_config()
+    if not args.offline: _check_active(cfg)
+    print(f"\n[DB SCAN] {args.db}")
+    findings = scan_database(args.db, max_rows=args.max_rows or 1000, send_raw=True)
+    print(f"\n[RESULT] {len(findings)} PII findings")
+    _submit_or_save(findings, 'database', args.db, cfg, args.offline)
+
+def cmd_scan_files(args):
+    from file_scanner import scan_files
+    cfg = load_config()
+    if not args.offline: _check_active(cfg)
+    print(f"\n[FILE SCAN] {args.path}")
+    findings = scan_files(args.path, max_files=args.max_files or 5000,
+                          ocr_images=not args.no_ocr, send_raw=True)
+    print(f"\n[RESULT] {len(findings)} PII findings")
+    _submit_or_save(findings, 'file', args.path, cfg, args.offline)
+
+def cmd_discover(args):
+    from network_scanner import discover_network
+    subnet = args.subnet or '.'.join(_get_local_ip().split('.')[:3])
+    print(f"\n[DISCOVER] Scanning {subnet}.1–254 (timeout={args.timeout or 0.3}s)")
+    results = discover_network(subnet, timeout=args.timeout or 0.3, dbs_only=args.dbs_only)
+    dbs = [r for r in results if r['type']=='database']
+    eps = [r for r in results if r['type']=='endpoint']
+    print(f"\n[FOUND] {len(dbs)} database servers, {len(eps)} endpoints\n")
+    for d in dbs:
+        print(f"  [{d['db_type']:15s}] {d['ip']}:{d['port']}")
+        print(f"    → pii-scanner scan-db --db \"{d['connect_hint']}\"")
+    if eps:
+        print(f"\n  Endpoints:")
+        for e in eps: print(f"  [{e['ip']:15s}] {e.get('hostname','')} {e.get('os','')}")
+        ips = ','.join(e['ip'] for e in eps[:10])
+        print(f"\n  → pii-scanner scan-endpoint --targets {ips}")
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    fname = f"discovery_{ts}.json"
+    Path(fname).write_text(json.dumps(results, indent=2))
+    print(f"\n[SAVED] → {fname}")
+
+def cmd_scan_endpoint(args):
+    from file_scanner import scan_files
+    cfg = load_config()
+    if not args.offline: _check_active(cfg)
+    targets = [t.strip() for t in args.targets.split(',')]
+    all_findings = []
+    for target in targets:
+        print(f"\n[ENDPOINT] {target}")
+        if platform.system() == 'Windows':
+            share = f"\\\\{target}\\C$"
+        else:
+            share = f"/tmp/pii_mnt_{target.replace('.','_')}"
+            os.makedirs(share, exist_ok=True)
+            if args.smb_user:
+                ret = os.system(f"mount -t cifs //{target}/C$ {share} "
+                               f"-o username={args.smb_user},password={args.smb_pass or ''} 2>/dev/null")
+                if ret != 0:
+                    print(f"  ✗ Mount failed — deploy agent directly on {target}"); continue
+            else:
+                print(f"  ℹ Use --smb-user / --smb-pass for remote Windows access"); continue
+        if os.path.exists(share):
+            findings = scan_files(share, max_files=args.max_files or 2000,
+                                  ocr_images=not args.no_ocr, send_raw=True)
+            for f in findings: f['endpoint_ip'] = target
+            all_findings.extend(findings)
+            print(f"  Found {len(findings)} PII items")
+        else:
+            print(f"  ✗ Cannot access {target}")
+    print(f"\n[RESULT] {len(all_findings)} total findings")
+    _submit_or_save(all_findings, 'endpoint', args.targets, cfg, args.offline)
+
+def cmd_upload(args):
+    from api_client import PIIAgentClient
+    cfg = load_config()
+    server = args.server or cfg.get('server_url')
+    api_key = args.api_key or cfg.get('api_key')
+    if not server or not api_key:
+        print("✗ Configure first or pass --server and --api-key"); sys.exit(1)
+    fpath = Path(args.file)
+    if not fpath.exists():
+        print(f"✗ File not found: {args.file}"); sys.exit(1)
+    data = json.loads(fpath.read_text())
+    findings = data.get('findings', [])
+    print(f"[UPLOAD] {args.file}: {len(findings)} findings, type={data.get('scan_type')}")
+    client = PIIAgentClient(server, api_key)
+    ok, msg = client.submit_findings(data.get('scan_type','unknown'), data.get('target','unknown'),
+                                      findings, offline_data=data)
+    if ok: print("[OK] Uploaded successfully!")
+    else: print(f"[FAIL] {msg}"); sys.exit(1)
+
+def cmd_daemon(args):
+    from api_client import PIIAgentClient
+    cfg = load_config()
+    if not cfg.get('server_url'): print("✗ Not configured"); sys.exit(1)
+    client = PIIAgentClient(cfg['server_url'], cfg['api_key'])
+    interval = args.interval or 300
+    print(f"[DAEMON] Heartbeat every {interval}s. Ctrl+C to stop.")
+    try:
+        while True:
+            ok, msg = client.check_activation()
+            if ok is False: print(f"[{_ts()}] ✗ DEACTIVATED — stopping"); sys.exit(0)
+            hb_ok, hb_msg = client.heartbeat()
+            print(f"[{_ts()}] {'✓ Online' if hb_ok else f'✗ {hb_msg}'}")
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\n[DAEMON] Stopped.")
+
+# ── MAIN ──────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(
-        description=f'SCE GRC PII Scanner Agent v{AGENT_VERSION} — ScudoCyber Solutions',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-ONLINE mode (default):
-  pii-scanner configure --server https://api.scegrc.com --api-key YOUR_KEY
-  pii-scanner db --type mysql --host 192.168.1.10 --database mydb --username root --password pass
+    print(BANNER)
+    parser = argparse.ArgumentParser(prog='pii-scanner',
+                                     description='KnightGuard GRC PII Scanner Agent v2.0')
+    sub = parser.add_subparsers(dest='command', required=True)
 
-OFFLINE mode (air-gapped environment):
-  pii-scanner db --type oracle --host 10.0.0.5 --database PROD --username dba --password pass --offline
-  pii-scanner files --path /var/data --offline
-  [disconnect from segregated environment, connect laptop to internet]
-  pii-scanner upload --file pii_db_20240115_143022.json
+    p = sub.add_parser('configure', help='Set server URL and API key')
+    p.add_argument('--server', required=True); p.add_argument('--api-key', required=True)
+    p.set_defaults(func=cmd_configure)
 
-Upload multiple files at once:
-  pii-scanner upload --file scan1.json --file scan2.json --file scan3.json
-        """
-    )
-    subparsers = parser.add_subparsers(dest='command')
+    p = sub.add_parser('status', help='Show status and test connection')
+    p.set_defaults(func=cmd_status)
 
-    # Configure
-    cfg = subparsers.add_parser('configure', help='Set server URL and API key')
-    cfg.add_argument('--server', help='SCE GRC server URL (e.g. https://api.scegrc.com)')
-    cfg.add_argument('--api-key', dest='api_key', help='Agent API key from dashboard')
+    p = sub.add_parser('scan-db', help='Scan database for PII')
+    p.add_argument('--db', required=True,
+        help='postgresql://u:p@h/db | oracle://u:p@h:1521/SID | mysql://u:p@h/db | /path/to.db')
+    p.add_argument('--max-rows', type=int, default=1000)
+    p.add_argument('--offline', action='store_true')
+    p.set_defaults(func=cmd_scan_db)
 
-    # Test
-    subparsers.add_parser('test', help='Test server connectivity')
+    p = sub.add_parser('scan-files', help='Scan files/dirs/images for PII')
+    p.add_argument('--path', required=True)
+    p.add_argument('--max-files', type=int, default=5000)
+    p.add_argument('--no-ocr', action='store_true', help='Skip OCR on images')
+    p.add_argument('--offline', action='store_true')
+    p.set_defaults(func=cmd_scan_files)
 
-    # DB scan
-    db = subparsers.add_parser('db', help='Scan a database for PII')
-    db.add_argument('--type', required=True, choices=['mysql','postgresql','mssql','sqlite','oracle'])
-    db.add_argument('--host', required=True, help='Database host IP or hostname')
-    db.add_argument('--port', type=int, help='Port (defaults: mysql=3306, pg=5432, etc.)')
-    db.add_argument('--database', required=True, help='Database / schema name')
-    db.add_argument('--username', default='', help='DB username')
-    db.add_argument('--password', default='', help='DB password')
-    db.add_argument('--offline', action='store_true',
-                    help='Air-gapped mode: save results locally, do NOT connect to internet')
+    p = sub.add_parser('discover', help='Discover databases and endpoints on network')
+    p.add_argument('--subnet', help='e.g. 192.168.1 (auto-detected)')
+    p.add_argument('--timeout', type=float, default=0.3)
+    p.add_argument('--dbs-only', action='store_true')
+    p.set_defaults(func=cmd_discover)
 
-    # File scan
-    fs = subparsers.add_parser('files', help='Scan files/folders for PII')
-    fs.add_argument('--path', required=True, help='File or directory path to scan')
-    fs.add_argument('--offline', action='store_true',
-                    help='Air-gapped mode: save results locally, do NOT connect to internet')
+    p = sub.add_parser('scan-endpoint', help='Scan remote PCs/laptops for PII')
+    p.add_argument('--targets', required=True, help='192.168.1.10,192.168.1.11')
+    p.add_argument('--smb-user'); p.add_argument('--smb-pass')
+    p.add_argument('--max-files', type=int, default=2000)
+    p.add_argument('--no-ocr', action='store_true')
+    p.add_argument('--offline', action='store_true')
+    p.set_defaults(func=cmd_scan_endpoint)
 
-    # Upload offline scan
-    up = subparsers.add_parser('upload', help='Upload offline scan file(s) to SCE GRC server')
-    up.add_argument('--file', required=True, action='append', metavar='FILE',
-                    help='Path to saved scan JSON. Repeat for multiple files: --file a.json --file b.json')
+    p = sub.add_parser('upload', help='Upload offline scan results')
+    p.add_argument('--file', required=True)
+    p.add_argument('--server'); p.add_argument('--api-key')
+    p.set_defaults(func=cmd_upload)
 
-    # Network discovery
-    net = subparsers.add_parser('network', help='Discover database services on a network')
-    net.add_argument('--cidr', required=True, help='Network CIDR range e.g. 192.168.1.0/24')
-
-    # API scanner
-    api_p = subparsers.add_parser('api', help='Scan REST API endpoints for PII')
-    api_p.add_argument('--url', required=True, help='Base API URL')
-    api_p.add_argument('--endpoints', required=True, help='Comma-separated endpoints e.g. /users,/customers')
-    api_p.add_argument('--token', help='Bearer token for auth')
-    api_p.add_argument('--header', action='append', help='Custom header Key:Value (repeatable)')
-    api_p.add_argument('--offline', action='store_true',
-                       help='Air-gapped mode: save results locally, do NOT connect to internet')
+    p = sub.add_parser('daemon', help='Run background heartbeat')
+    p.add_argument('--interval', type=int, default=300)
+    p.set_defaults(func=cmd_daemon)
 
     args = parser.parse_args()
-
-    if args.command == 'configure':
-        configure(args)
-    elif args.command == 'test':
-        test_connection(args)
-    elif args.command == 'db':
-        scan_database(args)
-    elif args.command == 'files':
-        scan_files(args)
-    elif args.command == 'upload':
-        upload_report(args)
-    elif args.command == 'network':
-        scan_network(args)
-    elif args.command == 'api':
-        scan_api(args)
-    else:
-        parser.print_help()
-
+    args.func(args)
 
 if __name__ == '__main__':
     main()

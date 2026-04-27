@@ -1,6 +1,27 @@
+# Core
 requests>=2.31.0
-pymysql>=1.1.0
+
+# Databases
 psycopg2-binary>=2.9.0
+mysql-connector-python>=8.0.0
 oracledb>=2.0.0
+pymongo>=4.0.0
+
+# MSSQL (optional — requires ODBC driver on OS)
+# pyodbc>=4.0.0
+
+# File scanning
 openpyxl>=3.1.0
 Pillow>=10.0.0
+
+# PDF scanning (optional but recommended)
+pdfplumber>=0.9.0
+
+# Image OCR — requires tesseract binary installed on OS
+# Windows: https://github.com/UB-Mannheim/tesseract/wiki
+# Linux: sudo apt install tesseract-ocr
+# Mac: brew install tesseract
+pytesseract>=0.3.10
+
+# Build to EXE
+pyinstaller>=6.0.0

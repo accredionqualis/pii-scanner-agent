@@ -1,383 +1,330 @@
 """
-SCE GRC PII Scanner — Database Scanner
-Capacity-aware scanning strategy:
-  - Small  tables  (<  10,000 rows) → full scan, all rows
-  - Medium tables  (<   1,000,000 rows) → first 2000 + random sample 2000
-  - Large  tables  (<  10,000,000 rows) → first 1000 + 3x random chunks + last 500
-  - Huge   tables  (>= 10,000,000 rows) → statistical sample capped at 5000 rows
-                                           with true count stored for report
-
-Memory safety: rows are fetched and processed column-by-column in batches of 500.
-A 20TB database with billions of rows will complete without OOM — each batch is
-at most 500 rows x N columns as strings, flushed after each column.
+KnightGuard GRC — Database Scanner v2.0
+Supports: PostgreSQL, MySQL/MariaDB, Oracle, MSSQL, SQLite, MongoDB
+Sends full raw PII values (feature #7).
 """
-
 import re
-import random
-from detectors import scan_text, mask_value
-
-# Thresholds
-SMALL_TABLE_LIMIT   =     10_000   # scan every row
-MEDIUM_TABLE_LIMIT  =  1_000_000   # scan first+random sample
-LARGE_TABLE_LIMIT   = 10_000_000   # scan first+chunks+last
-BATCH_SIZE          =        500   # rows fetched per cursor batch
-MAX_SAMPLES_STORED  =        100   # max masked values kept per finding
+import sys
+from detectors import scan_text
 
 
-class DBScanner:
-    def __init__(self, config, api_client=None):
-        self.config  = config
-        self.api_client = api_client
+SKIP_SCHEMAS = {
+    'pg_catalog', 'information_schema', 'pg_toast',
+    'sys', 'SYSTEM', 'OUTLN', 'DBSNMP', 'APPQOSSYS',
+    'WMSYS', 'EXFSYS', 'CTXSYS', 'XDB', 'MDSYS', 'OLAPSYS',
+    'ORDSYS', 'ORDPLUGINS', 'SI_INFORMTN_SCHEMA', 'ANONYMOUS',
+    'performance_schema', 'mysql', 'information_schema', 'sys',
+}
 
-    def get_connection(self):
-        db_type  = self.config.get('type', 'mysql').lower()
-        host     = self.config.get('host', 'localhost')
-        port     = self.config.get('port')
-        database = self.config.get('database', '')
-        username = self.config.get('username', '')
-        password = self.config.get('password', '')
+TEXT_TYPES_PG = ('text', 'varchar', 'character varying', 'char', 'json', 'jsonb', 'xml')
+TEXT_TYPES_MY = ('varchar', 'text', 'mediumtext', 'longtext', 'char', 'tinytext', 'json', 'enum')
+TEXT_TYPES_ORA = ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'CLOB', 'NCLOB', 'VARCHAR')
+TEXT_TYPES_MS = ('varchar', 'nvarchar', 'char', 'nchar', 'text', 'ntext', 'xml')
 
-        if db_type == 'mysql':
-            import pymysql
-            port = port or 3306
-            return pymysql.connect(
-                host=host, port=int(port), user=username, password=password,
-                database=database, connect_timeout=10
-            ), 'mysql'
-        elif db_type == 'postgresql':
-            import psycopg2
-            port = port or 5432
-            return psycopg2.connect(
-                host=host, port=int(port), user=username, password=password,
-                dbname=database, connect_timeout=10
-            ), 'pg'
-        elif db_type == 'mssql':
-            import pyodbc
-            port = port or 1433
-            conn_str = (
-                f'DRIVER={{ODBC Driver 17 for SQL Server}};'
-                f'SERVER={host},{port};DATABASE={database};'
-                f'UID={username};PWD={password}'
-            )
-            return pyodbc.connect(conn_str, timeout=10), 'mssql'
-        elif db_type == 'sqlite':
-            import sqlite3
-            return sqlite3.connect(database), 'sqlite'
-        elif db_type == 'oracle':
-            import oracledb
-            oracledb.init_oracle_client()
-            port = port or 1521
-            dsn = f'{host}:{port}/{database}'
-            return oracledb.connect(user=username, password=password, dsn=dsn), 'oracle'
-        raise ValueError(f'Unsupported DB type: {db_type}')
 
-    def get_tables(self, conn, db_type, database):
-        cur = conn.cursor()
-        if db_type == 'mysql':
-            cur.execute(
-                "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s",
-                (database,)
-            )
-        elif db_type == 'pg':
-            cur.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'")
-        elif db_type == 'mssql':
-            cur.execute("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE'")
-        elif db_type == 'sqlite':
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        elif db_type == 'oracle':
-            cur.execute("SELECT TABLE_NAME FROM USER_TABLES")
-        return [r[0] for r in cur.fetchall()]
+def _aggregate_findings(raw_findings, table, column, db_type):
+    """Group raw findings by detector+table+column, collecting all values."""
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for f in raw_findings:
+        key = (f['detector'], table, column)
+        groups[key].append(f)
 
-    def get_columns(self, conn, db_type, database, table):
-        cur = conn.cursor()
-        if db_type == 'mysql':
-            cur.execute(
-                "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
-                "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s",
-                (database, table)
-            )
-        elif db_type == 'pg':
-            cur.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema='public' AND table_name=%s",
-                (table,)
-            )
-        elif db_type == 'mssql':
-            cur.execute(
-                f"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='{table}'"
-            )
-        elif db_type == 'sqlite':
-            cur.execute(f"SELECT name FROM pragma_table_info('{table}')")
-        elif db_type == 'oracle':
-            cur.execute(
-                f"SELECT COLUMN_NAME FROM USER_TAB_COLUMNS WHERE TABLE_NAME='{table.upper()}'"
-            )
-        return [r[0] for r in cur.fetchall()]
+    results = []
+    for (detector, tbl, col), items in groups.items():
+        results.append({
+            'detector': detector,
+            'detector_name': detector,
+            'table_name': tbl,
+            'column_name': col,
+            'db_type': db_type,
+            'sensitivity': items[0]['sensitivity'],
+            'dpdp_spdi': items[0]['dpdp_spdi'],
+            'sample_count': len(items),
+            # Feature #7: ALL raw values
+            'raw_values': [i['raw_value'] for i in items],
+            'masked_values': [i['masked_value'] for i in items],
+            'sample_values': [i['masked_value'] for i in items],  # backward compat
+        })
+    return results
 
-    def get_row_count(self, conn, db_type, database, table):
-        """
-        Fast row count using DB stats tables — avoids full COUNT(*) on huge tables.
-        Returns approximate count for large tables, exact for small.
-        """
-        cur = conn.cursor()
+
+def scan_postgresql(conn_str, max_rows):
+    import psycopg2
+    print(f"  Connecting to PostgreSQL...")
+    conn = psycopg2.connect(conn_str)
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT table_schema, table_name, column_name
+        FROM information_schema.columns
+        WHERE data_type = ANY(%s)
+        AND table_schema NOT IN %s
+        ORDER BY table_schema, table_name, column_name
+    """, (list(TEXT_TYPES_PG), tuple(SKIP_SCHEMAS)))
+    columns = cur.fetchall()
+    print(f"  Connected. Scanning {len(columns)} text columns...")
+
+    all_findings = []
+    scanned = 0
+    for schema, table, col in columns:
         try:
-            if db_type == 'mysql':
-                # information_schema.TABLES is near-instant even for 20TB tables
-                cur.execute(
-                    "SELECT TABLE_ROWS FROM information_schema.TABLES "
-                    "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s",
-                    (database, table)
-                )
-                row = cur.fetchone()
-                if row and row[0] is not None:
-                    return int(row[0])
-
-            elif db_type == 'pg':
-                # pg_class.reltuples is instant — slightly approximate for huge tables
-                cur.execute(
-                    "SELECT reltuples::bigint FROM pg_class "
-                    "WHERE relname=%s AND relnamespace="
-                    "(SELECT oid FROM pg_namespace WHERE nspname='public')",
-                    (table,)
-                )
-                row = cur.fetchone()
-                if row and row[0] is not None and row[0] >= 0:
-                    return int(row[0])
-
-            elif db_type == 'mssql':
-                cur.execute(
-                    "SELECT SUM(p.rows) FROM sys.tables t "
-                    "JOIN sys.partitions p ON t.object_id=p.object_id "
-                    f"WHERE t.name='{table}' AND p.index_id IN (0,1)"
-                )
-                row = cur.fetchone()
-                if row and row[0]:
-                    return int(row[0])
-
-            elif db_type == 'oracle':
-                cur.execute(
-                    f"SELECT NUM_ROWS FROM USER_TABLES WHERE TABLE_NAME='{table.upper()}'"
-                )
-                row = cur.fetchone()
-                if row and row[0]:
-                    return int(row[0])
-
-            # SQLite + fallback (only runs for genuinely small tables or unknown DBs)
-            cur.execute(f'SELECT COUNT(*) FROM "{table}"')
-            return int(cur.fetchone()[0])
-
+            cur.execute(f'SELECT "{col}" FROM "{schema}"."{table}" LIMIT {max_rows}')
+            rows = cur.fetchall()
+            raw = []
+            for row in rows:
+                if row[0]:
+                    raw.extend(scan_text(str(row[0]), f'{schema}.{table}.{col}'))
+            if raw:
+                all_findings.extend(_aggregate_findings(raw, f'{schema}.{table}', col, 'postgresql'))
+            scanned += 1
+            if scanned % 50 == 0:
+                print(f"  Scanned {scanned}/{len(columns)} columns, {len(all_findings)} findings...")
         except Exception:
-            return 0
+            pass
 
-    def _offset_query(self, db_type, table, offset, limit):
-        """Build dialect-specific LIMIT/OFFSET query."""
-        if db_type == 'oracle':
-            return (
-                f'SELECT * FROM "{table}" '
-                f'OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY'
-            )
-        elif db_type == 'mssql':
-            return (
-                f'SELECT * FROM [{table}] '
-                f'ORDER BY (SELECT NULL) '
-                f'OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY'
-            )
-        elif db_type == 'mysql':
-            return f'SELECT * FROM `{table}` LIMIT {limit} OFFSET {offset}'
-        else:
-            return f'SELECT * FROM "{table}" LIMIT {limit} OFFSET {offset}'
+    cur.close(); conn.close()
+    print(f"  Done: {scanned} columns, {len(all_findings)} findings")
+    return all_findings
 
-    def _fetch_rows(self, conn, db_type, table, offset, limit):
-        cur = conn.cursor()
+
+def scan_mysql(conn_str, max_rows):
+    import mysql.connector
+    m = re.match(r'mysql://([^:]+):([^@]+)@([^:/]+)(?::(\d+))?/(.+)', conn_str)
+    if not m:
+        print("  ✗ Format: mysql://user:pass@host/database")
+        return []
+    user, pwd, host, port, db = m.groups()
+    port = int(port or 3306)
+    print(f"  Connecting to MySQL {host}:{port}/{db}...")
+    conn = mysql.connector.connect(host=host, user=user, password=pwd, database=db, port=port)
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = %s AND DATA_TYPE IN ({})
+        ORDER BY TABLE_NAME, COLUMN_NAME
+    """.format(','.join(['%s'] * len(TEXT_TYPES_MY))), [db] + list(TEXT_TYPES_MY))
+    columns = cur.fetchall()
+    print(f"  Connected. Scanning {len(columns)} text columns...")
+
+    all_findings = []
+    for table, col in columns:
         try:
-            cur.execute(self._offset_query(db_type, table, offset, limit))
-            return cur.fetchall()
+            cur.execute(f"SELECT `{col}` FROM `{table}` LIMIT {max_rows}")
+            raw = []
+            for (val,) in cur.fetchall():
+                if val:
+                    raw.extend(scan_text(str(val), f'{db}.{table}.{col}'))
+            if raw:
+                all_findings.extend(_aggregate_findings(raw, f'{db}.{table}', col, 'mysql'))
         except Exception:
-            return []
+            pass
 
-    def _build_scan_plan(self, row_count):
-        """
-        Returns list of (offset, limit, label) tuples.
-        Total rows fetched is always bounded — safe for any DB size.
-
-        20TB / 10B row table example:
-          head 500 + tail 500 + 6 x 500 spread = 4000 rows scanned
-          sample_count in report is scaled to estimated full-table count
-        """
-        if row_count <= SMALL_TABLE_LIMIT:
-            # Full scan in BATCH_SIZE chunks
-            plan = []
-            offset = 0
-            while offset < row_count:
-                plan.append((offset, min(BATCH_SIZE, row_count - offset), 'full'))
-                offset += BATCH_SIZE
-            return plan
-
-        elif row_count <= MEDIUM_TABLE_LIMIT:
-            # Head 1000 + tail 500 + 3 random chunks of 500
-            plan = [
-                (0,               1000, 'head'),
-                (max(0, row_count - 500), 500, 'tail'),
-            ]
-            mid = row_count // 4
-            for _ in range(3):
-                off = random.randint(mid, max(mid + 1, row_count - 600))
-                plan.append((off, 500, 'sample'))
-            return plan
-
-        elif row_count <= LARGE_TABLE_LIMIT:
-            # Head 1000 + tail 500 + 4 evenly-spaced random chunks of 500
-            plan = [
-                (0,               1000, 'head'),
-                (max(0, row_count - 500), 500, 'tail'),
-            ]
-            segment = row_count // 5
-            for i in range(1, 5):
-                off = random.randint(segment * i, max(segment * i + 1, segment * (i + 1) - 600))
-                plan.append((off, 500, 'sample'))
-            return plan
-
-        else:
-            # Huge table (> 10M rows — handles 20TB databases)
-            # Head 500 + tail 500 + 6 evenly-spaced chunks of 500 = max 4000 rows
-            plan = [
-                (0,               500, 'head'),
-                (max(0, row_count - 500), 500, 'tail'),
-            ]
-            segment = row_count // 7
-            for i in range(1, 7):
-                plan.append((segment * i, 500, 'sample'))
-            return plan
-
-    def _scan_column(self, all_rows, col_idx, col_name, table, row_count):
-        """
-        Scan one column's values across all fetched rows.
-        Scales sample_count to estimated full-table count.
-        """
-        col_values = [
-            str(r[col_idx])
-            for r in all_rows
-            if col_idx < len(r) and r[col_idx] is not None
-        ]
-        if not col_values:
-            return []
-
-        col_text   = ' '.join(col_values)
-        col_findings = scan_text(col_text, max_samples=MAX_SAMPLES_STORED)
-
-        results = []
-        sampled_rows = len(all_rows)
-
-        for f in col_findings:
-            # Scale detected count to full table size
-            if sampled_rows > 0 and row_count > sampled_rows:
-                scale = row_count / sampled_rows
-                estimated_count = max(f['sample_count'], int(f['sample_count'] * scale))
-            else:
-                estimated_count = f['sample_count']
-
-            results.append({
-                'detector':      f['detector'],
-                'table_name':    table,
-                'column_name':   col_name,
-                'sample_count':  estimated_count,       # est. full-table records
-                'sensitivity':   f['sensitivity'],
-                'is_dpdp_spdi':  f['dpdp_spdi'],
-                'sample_values': f.get('matches', []),  # masked values list
-                'rows_scanned':  sampled_rows,          # rows actually checked
-                'total_rows':    row_count,             # real table size
-            })
-        return results
-
-    def scan(self, progress_cb=None):
-        findings = []
-        try:
-            conn, db_type = self.get_connection()
-        except Exception as e:
-            raise Exception(f"DB connection failed: {e}")
-
-        database     = self.config.get('database', '')
-        tables       = self.get_tables(conn, db_type, database)
-        total_tables = len(tables)
-
-        for t_idx, table in enumerate(tables):
-            try:
-                # Step 1 — fast row count (stats-based, no full scan)
-                row_count = self.get_row_count(conn, db_type, database, table)
-
-                size_label = (
-                    'FULL'   if row_count <= SMALL_TABLE_LIMIT   else
-                    'MEDIUM' if row_count <= MEDIUM_TABLE_LIMIT  else
-                    'LARGE'  if row_count <= LARGE_TABLE_LIMIT   else
-                    'HUGE'
-                )
-
-                if progress_cb:
-                    progress_cb(
-                        f"[{t_idx+1}/{total_tables}] {table} "
-                        f"(~{row_count:,} rows · {size_label} scan)"
-                    )
-
-                if row_count == 0:
-                    continue
-
-                # Step 2 — decide which rows to fetch
-                plan = self._build_scan_plan(row_count)
-
-                # Step 3 — fetch all planned batches (shared across columns)
-                all_rows = []
-                for (offset, limit, label) in plan:
-                    batch = self._fetch_rows(conn, db_type, table, offset, limit)
-                    all_rows.extend(batch)
-
-                if not all_rows:
-                    continue
-
-                # Step 4 — get column names
-                cols = self.get_columns(conn, db_type, database, table)
-
-                # Step 5 — scan each column independently
-                for col_idx, col_name in enumerate(cols):
-                    col_findings = self._scan_column(
-                        all_rows, col_idx, col_name, table, row_count
-                    )
-                    findings.extend(col_findings)
-
-            except Exception as e:
-                if progress_cb:
-                    progress_cb(f"  WARNING: Skipped table '{table}': {e}")
-                continue
-
-        conn.close()
-        return findings
+    cur.close(); conn.close()
+    print(f"  Done: {len(all_findings)} findings")
+    return all_findings
 
 
-if __name__ == '__main__':
-    import sqlite3, tempfile, os
+def scan_oracle(conn_str, max_rows):
+    import oracledb
+    m = re.match(r'oracle://([^:]+):([^@]+)@([^:/]+)(?::(\d+))?/?(.*)', conn_str)
+    if not m:
+        print("  ✗ Format: oracle://user:pass@host:1521/SERVICE")
+        return []
+    user, pwd, host, port, service = m.groups()
+    port = int(port or 1521)
+    service = service or 'ORCL'
+    print(f"  Connecting to Oracle {host}:{port}/{service}...")
 
-    db = tempfile.mktemp(suffix='.db')
-    conn = sqlite3.connect(db)
-    conn.execute(
-        'CREATE TABLE customers '
-        '(id INTEGER, name TEXT, email TEXT, phone TEXT, pan TEXT, aadhaar TEXT)'
+    try:
+        oracledb.init_oracle_client()
+    except Exception:
+        pass  # thin mode fallback
+
+    conn = oracledb.connect(user=user, password=pwd, dsn=f"{host}:{port}/{service}")
+    cur = conn.cursor()
+
+    sql = """SELECT owner, table_name, column_name FROM all_tab_columns
+             WHERE data_type IN ({})
+             AND owner NOT IN ({})
+             ORDER BY owner, table_name, column_name""".format(
+        ','.join([f"'{t}'" for t in TEXT_TYPES_ORA]),
+        ','.join([f"'{s}'" for s in SKIP_SCHEMAS])
     )
-    for i in range(500):
-        conn.execute(
-            "INSERT INTO customers VALUES (?,?,?,?,?,?)",
-            (i, f'User {i}', f'user{i}@test.com',
-             f'9876500{i:03d}', 'ABCPD1234F', '2345 6789 0123')
-        )
-    conn.commit()
-    conn.close()
+    cur.execute(sql)
+    columns = cur.fetchall()
+    print(f"  Connected. Scanning {len(columns)} text columns...")
 
-    scanner = DBScanner({'type': 'sqlite', 'database': db})
-    results = scanner.scan(print)
-    print(f"\n{len(results)} findings:")
-    for r in results:
-        print(
-            f"  {r['table_name']}.{r['column_name']}: {r['detector']} "
-            f"— ~{r['sample_count']:,} est. records "
-            f"(scanned {r['rows_scanned']} of {r['total_rows']}) "
-            f"— {len(r['sample_values'])} masked samples"
-        )
-    os.unlink(db)
+    all_findings = []
+    scanned = 0
+    for owner, table, col in columns:
+        try:
+            cur.execute(f'SELECT "{col}" FROM "{owner}"."{table}" WHERE ROWNUM <= {max_rows}')
+            raw = []
+            for (val,) in cur.fetchall():
+                if val:
+                    raw.extend(scan_text(str(val), f'{owner}.{table}.{col}'))
+            if raw:
+                all_findings.extend(_aggregate_findings(raw, f'{owner}.{table}', col, 'oracle'))
+            scanned += 1
+            if scanned % 50 == 0:
+                print(f"  Scanned {scanned}/{len(columns)} columns, {len(all_findings)} findings...")
+        except Exception:
+            pass
+
+    cur.close(); conn.close()
+    print(f"  Done: {scanned} columns, {len(all_findings)} findings")
+    return all_findings
+
+
+def scan_mssql(conn_str, max_rows):
+    import pyodbc
+    m = re.match(r'mssql://([^:]+):([^@]+)@([^:/]+)(?::(\d+))?/(.+)', conn_str)
+    if not m:
+        print("  ✗ Format: mssql://user:pass@host/database")
+        return []
+    user, pwd, host, port, db = m.groups()
+    port = int(port or 1433)
+    print(f"  Connecting to MSSQL {host}:{port}/{db}...")
+    conn = pyodbc.connect(
+        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+        f"SERVER={host},{port};DATABASE={db};UID={user};PWD={pwd}"
+    )
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE DATA_TYPE IN ({})
+        ORDER BY TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME
+    """.format(','.join([f"'{t}'" for t in TEXT_TYPES_MS])))
+    columns = cur.fetchall()
+    print(f"  Connected. Scanning {len(columns)} text columns...")
+
+    all_findings = []
+    for schema, table, col in columns:
+        try:
+            cur.execute(f"SELECT TOP {max_rows} [{col}] FROM [{schema}].[{table}]")
+            raw = []
+            for (val,) in cur.fetchall():
+                if val:
+                    raw.extend(scan_text(str(val), f'{schema}.{table}.{col}'))
+            if raw:
+                all_findings.extend(_aggregate_findings(raw, f'{schema}.{table}', col, 'mssql'))
+        except Exception:
+            pass
+
+    cur.close(); conn.close()
+    print(f"  Done: {len(all_findings)} findings")
+    return all_findings
+
+
+def scan_sqlite(db_path, max_rows):
+    import sqlite3
+    print(f"  Connecting to SQLite: {db_path}...")
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    tables = [r[0] for r in cur.fetchall()]
+    print(f"  Connected. Found {len(tables)} tables...")
+
+    all_findings = []
+    for table in tables:
+        try:
+            cur.execute(f"SELECT * FROM `{table}` LIMIT {max_rows}")
+            cols = [d[0] for d in cur.description]
+            raw = []
+            for row in cur.fetchall():
+                for i, val in enumerate(row):
+                    if val and isinstance(val, str):
+                        raw.extend(scan_text(val, f'{table}.{cols[i]}'))
+            if raw:
+                all_findings.extend(_aggregate_findings(raw, table, '*', 'sqlite'))
+        except Exception:
+            pass
+
+    conn.close()
+    print(f"  Done: {len(all_findings)} findings")
+    return all_findings
+
+
+def scan_mongodb(conn_str, max_rows):
+    try:
+        from pymongo import MongoClient
+    except ImportError:
+        print("  ✗ pymongo not installed. Run: pip install pymongo")
+        return []
+
+    print(f"  Connecting to MongoDB...")
+    m = re.match(r'mongodb://([^:]+):([^@]+)@([^:/]+)(?::(\d+))?/?(.*)', conn_str)
+    if m:
+        user, pwd, host, port, db_name = m.groups()
+        client = MongoClient(conn_str)
+    else:
+        client = MongoClient(conn_str)
+        db_name = None
+
+    all_findings = []
+    db_names = [db_name] if db_name else client.list_database_names()
+
+    for db_name in db_names:
+        if db_name in ('admin', 'local', 'config'):
+            continue
+        db = client[db_name]
+        for coll_name in db.list_collection_names():
+            try:
+                for doc in db[coll_name].find().limit(max_rows):
+                    text = str(doc)
+                    raw = scan_text(text, f'{db_name}.{coll_name}')
+                    if raw:
+                        all_findings.extend(_aggregate_findings(raw, f'{db_name}.{coll_name}', '*', 'mongodb'))
+            except Exception:
+                pass
+
+    client.close()
+    print(f"  Done: {len(all_findings)} findings")
+    return all_findings
+
+
+def scan_database(connection_string, max_rows=1000, send_raw=True):
+    """Main entry point — detects DB type from connection string."""
+    cs = connection_string.lower()
+
+    try:
+        if cs.startswith('postgresql') or cs.startswith('postgres'):
+            return scan_postgresql(connection_string, max_rows)
+        elif cs.startswith('mysql'):
+            return scan_mysql(connection_string, max_rows)
+        elif cs.startswith('oracle'):
+            return scan_oracle(connection_string, max_rows)
+        elif cs.startswith('mssql') or cs.startswith('sqlserver'):
+            return scan_mssql(connection_string, max_rows)
+        elif cs.startswith('mongodb'):
+            return scan_mongodb(connection_string, max_rows)
+        elif cs.endswith('.db') or cs.endswith('.sqlite') or cs.endswith('.sqlite3'):
+            return scan_sqlite(connection_string, max_rows)
+        else:
+            import os
+            if os.path.exists(connection_string):
+                return scan_sqlite(connection_string, max_rows)
+            print(f"  ✗ Unsupported DB type. Supported: postgresql, mysql, oracle, mssql, mongodb, sqlite")
+            print(f"  Examples:")
+            print(f"    postgresql://user:pass@host/dbname")
+            print(f"    mysql://user:pass@host/dbname")
+            print(f"    oracle://user:pass@host:1521/ORCL")
+            print(f"    mssql://user:pass@host/dbname")
+            print(f"    mongodb://user:pass@host/dbname")
+            print(f"    /path/to/file.db")
+            return []
+    except ImportError as e:
+        drv = str(e)
+        print(f"  ✗ Missing driver: {drv}")
+        if 'psycopg2' in drv: print("  Install: pip install psycopg2-binary")
+        elif 'mysql' in drv: print("  Install: pip install mysql-connector-python")
+        elif 'oracledb' in drv: print("  Install: pip install oracledb")
+        elif 'pyodbc' in drv: print("  Install: pip install pyodbc")
+        elif 'pymongo' in drv: print("  Install: pip install pymongo")
+        return []
+    except Exception as e:
+        print(f"  ✗ Connection failed: {e}")
+        return []

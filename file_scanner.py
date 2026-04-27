@@ -1,86 +1,206 @@
+"""
+KnightGuard GRC — File Scanner v2.0
+Scans text files, PDFs, Office docs, and images (OCR).
+Sends full raw PII values (feature #7).
+"""
 import os
 import re
+from pathlib import Path
 from detectors import scan_text
 
-SUPPORTED_EXTENSIONS = {'.txt','.csv','.log','.json','.xml','.sql','.md','.html','.htm'}
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-SKIP_DIRS = {'node_modules','.git','__pycache__','.next','dist','build','venv','.venv'}
+TEXT_EXTENSIONS = {
+    '.txt', '.csv', '.json', '.xml', '.log', '.sql',
+    '.py', '.js', '.ts', '.html', '.htm', '.md',
+    '.yaml', '.yml', '.ini', '.conf', '.config', '.env',
+    '.sh', '.bat', '.ps1', '.properties', '.toml',
+    '.eml', '.msg',
+}
+OFFICE_EXTENSIONS = {'.docx', '.xlsx', '.pptx', '.odt', '.ods'}
+PDF_EXTENSIONS = {'.pdf'}
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.gif', '.webp'}
 
-class FileScanner:
-    def __init__(self, path, api_client=None):
-        self.path = path
-        self.api_client = api_client
+SKIP_DIRS = {
+    '__pycache__', '.git', 'node_modules', '.next', 'dist',
+    'build', 'venv', '.venv', 'env', 'Windows', 'Program Files',
+    'Program Files (x86)', '$Recycle.Bin', 'AppData',
+    'System32', 'SysWOW64',
+}
 
-    def scan(self, progress_cb=None):
-        findings = []
-        files_scanned = 0
-        for root, dirs, files in os.walk(self.path):
-            # Skip system directories
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-            for fname in files:
-                ext = os.path.splitext(fname)[1].lower()
-                if ext not in SUPPORTED_EXTENSIONS:
-                    continue
-                fpath = os.path.join(root, fname)
-                try:
-                    if os.path.getsize(fpath) > MAX_FILE_SIZE:
-                        continue
-                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                        text = f.read()
-                    file_findings = scan_text(text)
-                    for finding in file_findings:
-                        findings.append({
-                            'detector': finding['detector'],
-                            'file_path': fpath,
-                            'table_name': '',
-                            'column_name': '',
-                            'sample_count': finding['sample_count'],
-                            'sensitivity': finding['sensitivity'],
-                            'is_dpdp_spdi': finding['dpdp_spdi'],
-                        })
-                    files_scanned += 1
-                    if progress_cb and files_scanned % 10 == 0:
-                        progress_cb(f"Scanned {files_scanned} files...")
-                except Exception:
-                    pass
-        return findings
-
-if __name__ == '__main__':
-    import tempfile, os
-    d = tempfile.mkdtemp()
-    with open(os.path.join(d,'test.csv'),'w') as f:
-        f.write("name,email,phone,aadhaar\nRahul,rahul@test.com,9876543210,234567890126\n")
-    scanner = FileScanner(d)
-    results = scanner.scan(print)
-    for r in results:
-        print(f"  {r['file_path']}: {r['detector']} ({r['sensitivity']})")
-    import shutil
-    shutil.rmtree(d)
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
 
-def scan_image_for_pii(image_path, detectors):
-    """Extract text from image using OCR and scan for PII"""
+def _make_finding(findings_list, file_path):
+    """Group raw scan results into per-file findings."""
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for f in findings_list:
+        groups[f['detector']].append(f)
+
+    results = []
+    for detector, items in groups.items():
+        results.append({
+            'detector': detector,
+            'detector_name': detector,
+            'file_path': str(file_path),
+            'sensitivity': items[0]['sensitivity'],
+            'dpdp_spdi': items[0]['dpdp_spdi'],
+            'sample_count': len(items),
+            'raw_values': [i['raw_value'] for i in items],       # Feature #7
+            'masked_values': [i['masked_value'] for i in items],
+            'sample_values': [i['masked_value'] for i in items],
+        })
+    return results
+
+
+def scan_text_file(filepath):
+    try:
+        if os.path.getsize(filepath) > MAX_FILE_SIZE:
+            return []
+        text = open(filepath, encoding='utf-8', errors='ignore').read()
+        raw = scan_text(text, str(filepath))
+        return _make_finding(raw, filepath)
+    except Exception:
+        return []
+
+
+def scan_pdf(filepath):
+    try:
+        import pdfplumber
+        text = ''
+        with pdfplumber.open(filepath) as pdf:
+            for page in pdf.pages[:50]:  # max 50 pages
+                t = page.extract_text()
+                if t:
+                    text += t + '\n'
+        raw = scan_text(text, str(filepath))
+        return _make_finding(raw, filepath)
+    except ImportError:
+        # Fallback: read raw bytes and look for text
+        try:
+            content = open(filepath, 'rb').read().decode('latin-1', errors='ignore')
+            raw = scan_text(content, str(filepath))
+            return _make_finding(raw, filepath)
+        except Exception:
+            return []
+    except Exception:
+        return []
+
+
+def scan_office(filepath):
+    ext = Path(filepath).suffix.lower()
+    text = ''
+    try:
+        if ext == '.docx':
+            import zipfile
+            with zipfile.ZipFile(filepath) as z:
+                if 'word/document.xml' in z.namelist():
+                    xml = z.read('word/document.xml').decode('utf-8', errors='ignore')
+                    text = re.sub(r'<[^>]+>', ' ', xml)
+        elif ext == '.xlsx':
+            import zipfile
+            with zipfile.ZipFile(filepath) as z:
+                for name in z.namelist():
+                    if name.startswith('xl/worksheets/') and name.endswith('.xml'):
+                        xml = z.read(name).decode('utf-8', errors='ignore')
+                        text += re.sub(r'<[^>]+>', ' ', xml) + '\n'
+        elif ext in ('.pptx', '.odt', '.ods'):
+            import zipfile
+            with zipfile.ZipFile(filepath) as z:
+                for name in z.namelist():
+                    if name.endswith('.xml'):
+                        xml = z.read(name).decode('utf-8', errors='ignore')
+                        text += re.sub(r'<[^>]+>', ' ', xml) + '\n'
+    except Exception:
+        pass
+
+    if text:
+        raw = scan_text(text, str(filepath))
+        return _make_finding(raw, filepath)
+    return []
+
+
+def scan_image_ocr(filepath):
+    """OCR scan — extracts text from images of Aadhaar, PAN, etc."""
     try:
         import pytesseract
         from PIL import Image
-        img = Image.open(image_path)
-        text = pytesseract.image_to_string(img)
+        img = Image.open(filepath)
+        # Try multiple PSM modes for different card layouts
+        texts = []
+        for psm in (6, 3, 11):
+            try:
+                t = pytesseract.image_to_string(img, config=f'--psm {psm}')
+                if t.strip():
+                    texts.append(t)
+            except Exception:
+                pass
+        text = '\n'.join(texts)
         if not text.strip():
             return []
-        findings = []
-        for name, detector in detectors.items():
-            matches = detector(text)
-            if matches:
-                findings.append({
-                    'detector_name': name,
-                    'file_path': image_path,
-                    'sample_count': len(matches),
-                    'sensitivity': 'HIGH',
-                    'is_dpdp_spdi': name in ['aadhaar','pan','passport'],
-                    'data_classes': [name]
-                })
+        raw = scan_text(text, str(filepath))
+        findings = _make_finding(raw, filepath)
+        for f in findings:
+            f['source'] = 'ocr'
         return findings
     except ImportError:
+        return []  # OCR not available — skip silently
+    except Exception:
         return []
-    except Exception as e:
+
+
+def scan_files(root_path, max_files=5000, ocr_images=True, send_raw=True):
+    """
+    Recursively scan all files under root_path.
+    Returns list of findings with full raw values (feature #7).
+    """
+    root = Path(root_path)
+    if not root.exists():
+        print(f"  ✗ Path does not exist: {root_path}")
         return []
+
+    findings = []
+    count = 0
+    skipped = 0
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Skip system/hidden dirs
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith('.')]
+
+        for fname in filenames:
+            if count >= max_files:
+                break
+            fp = Path(dirpath) / fname
+            ext = fp.suffix.lower()
+
+            try:
+                if not fp.exists() or not fp.is_file():
+                    continue
+                size = fp.stat().st_size
+                if size == 0 or size > MAX_FILE_SIZE:
+                    skipped += 1
+                    continue
+            except Exception:
+                continue
+
+            result = []
+            if ext in TEXT_EXTENSIONS:
+                result = scan_text_file(fp)
+            elif ext in PDF_EXTENSIONS:
+                result = scan_pdf(fp)
+            elif ext in OFFICE_EXTENSIONS:
+                result = scan_office(fp)
+            elif ext in IMAGE_EXTENSIONS and ocr_images:
+                result = scan_image_ocr(fp)
+            else:
+                continue
+
+            count += 1
+            if result:
+                findings.extend(result)
+                print(f"  [{count}] {fp.name} — {len(result)} finding(s)")
+
+            if count % 200 == 0:
+                print(f"  Scanned {count} files, {len(findings)} total findings...")
+
+    print(f"  Complete: {count} files scanned, {skipped} skipped, {len(findings)} findings")
+    return findings
