@@ -378,9 +378,14 @@ def _scan_oracle_table(args):
             if raw:
                 vprint(f"  ✓ PII found: {owner}.{table}.{col} — {len(raw)} matches")
                 findings.extend(_aggregate_findings(raw, f'{owner}.{table}', col, 'oracle'))
-        cur.close(); conn.close()
-    except Exception:
-        pass
+        cur.close()
+        if pool:
+            try: pool.release(conn)
+            except: pass
+        else:
+            conn.close()
+    except Exception as e:
+        vprint(f"[SKIP] {owner}.{table} — {e}")
     return findings
 
 
@@ -415,11 +420,22 @@ def scan_oracle(conn_str, max_rows, threads=20):
 
     total = len(tables)
     print(f"  {total} tables | {len(raw_cols)} text columns | {threads} threads")
-    pool_obj = pool if use_pool else None
-    tasks = [(dsn, user, pwd, owner, table, cols, max_rows, pool_obj)
+
+    # Create connection pool for thread reuse
+    pool = None
+    pool_size = min(threads, 20)
+    try:
+        pool = oracledb.create_pool(user=user, password=pwd, dsn=dsn,
+                                    min=2, max=pool_size, increment=1)
+        print(f"  Connection pool: {pool_size} connections")
+    except Exception as pe:
+        pool = None
+        print(f"  Using direct connections (pool failed: {pe})")
+
+    tasks = [(dsn, user, pwd, owner, table, cols, max_rows, pool)
              for (owner, table), cols in tables.items()]
     findings = _run_parallel_scan(tasks, _scan_oracle_table, conn_str, total)
-    if use_pool:
+    if pool:
         try: pool.close()
         except: pass
     _clear_checkpoint(conn_str)
