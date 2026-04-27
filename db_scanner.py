@@ -171,9 +171,10 @@ def _run_parallel_scan(tasks, scan_fn, conn_str, total, label='tables'):
         print(f"  Skipping {done} already-scanned tables, resuming {len(tasks)} remaining...")
 
     start = time.time()
-    threads = max(1, min(50, len(tasks)))
+    # Use passed thread count, not recalculated
+    actual_threads = max(1, min(50, len(tasks)))
 
-    with ThreadPoolExecutor(max_workers=threads) as executor:
+    with ThreadPoolExecutor(max_workers=actual_threads) as executor:
         futures = {executor.submit(scan_fn, task): i for i, task in enumerate(tasks)}
         for future in as_completed(futures):
             try:
@@ -335,12 +336,13 @@ def scan_mysql(conn_str, max_rows, threads=20):
 # ── Oracle ────────────────────────────────────────────────────────
 
 def _scan_oracle_table(args):
-    dsn, user, pwd, owner, table, columns, max_rows = args
+    dsn, user, pwd, owner, table, columns, max_rows = args[:7]
+    pool = args[7] if len(args) > 7 else None
     findings = []
     try:
         import oracledb, os
         os.environ['ORA_PYTHON_DRIVER_TYPE'] = 'thin'
-        conn = oracledb.connect(user=user, password=pwd, dsn=dsn)
+        conn = pool.acquire() if pool else oracledb.connect(user=user, password=pwd, dsn=dsn)
         cur = conn.cursor()
         columns = sorted(
             [c for c in columns if _should_scan_column(c)],
@@ -350,7 +352,7 @@ def _scan_oracle_table(args):
             conn.close(); return findings
         cols_sql = ', '.join(f'"{c}"' for c in columns)
         try:
-            cur.execute(f'SELECT {cols_sql} FROM "{owner}"."{table}" SAMPLE(10) FETCH FIRST {max_rows} ROWS ONLY')
+            cur.execute(f'SELECT {cols_sql} FROM "{owner}"."{table}" SAMPLE(5) FETCH FIRST {max_rows} ROWS ONLY')
         except Exception:
             try:
                 cur.execute(f'SELECT {cols_sql} FROM "{owner}"."{table}" WHERE ROWNUM <= {max_rows}')
@@ -402,9 +404,13 @@ def scan_oracle(conn_str, max_rows, threads=20):
 
     total = len(tables)
     print(f"  {total} tables | {len(raw_cols)} text columns | {threads} threads")
-    tasks = [(dsn, user, pwd, owner, table, cols, max_rows)
+    pool_obj = pool if use_pool else None
+    tasks = [(dsn, user, pwd, owner, table, cols, max_rows, pool_obj)
              for (owner, table), cols in tables.items()]
     findings = _run_parallel_scan(tasks, _scan_oracle_table, conn_str, total)
+    if use_pool:
+        try: pool.close()
+        except: pass
     _clear_checkpoint(conn_str)
     return findings
 
