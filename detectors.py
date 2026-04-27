@@ -35,6 +35,42 @@ def mask_value(val):
     return v[:show] + '*' * (len(v) - show * 2) + v[-show:]
 
 
+def _validate_bank_account(number):
+    """
+    Reject obvious false positives:
+    - Pure sequential numbers (123456789)
+    - All same digit (999999999)
+    - Common patterns (timestamps, phone numbers already caught by Mobile detector)
+    - Numbers that look like years/dates
+    - Numbers starting with 0000
+    """
+    n = str(number).strip()
+    if len(n) < 9 or len(n) > 18:
+        return False
+    # Reject all same digits
+    if len(set(n)) == 1:
+        return False
+    # Reject sequential ascending (123456789)
+    if n == ''.join(str(i % 10) for i in range(int(n[0]), int(n[0]) + len(n))):
+        return False
+    # Reject sequential descending (987654321)
+    if n == ''.join(str(abs(9 - i) % 10) for i in range(len(n))):
+        return False
+    # Reject if starts with 0000
+    if n.startswith('0000'):
+        return False
+    # Reject obvious phone numbers (already caught by Mobile detector)
+    if len(n) == 10 and n[0] in '6789':
+        return False
+    # Reject 10-digit numbers starting with +91 prefix patterns
+    if len(n) == 12 and n[:2] == '91' and n[2] in '6789':
+        return False
+    # Must have at least 3 different digits to be a real account number
+    if len(set(n)) < 3:
+        return False
+    return True
+
+
 DETECTORS = [
     {
         'name': 'Aadhaar',
@@ -137,15 +173,28 @@ DETECTORS = [
 ]
 
 
+# Columns where bank account numbers are likely
+BANK_LIKELY_COLS = re.compile(
+    r'(account|acct|acc|bank|ifsc|iban|bsb|routing|sort.?code|'
+    r'beneficiar|remit|payment|transfer|debit|credit|saving|current)',
+    re.IGNORECASE
+)
+
+# Detectors to skip in non-PII contexts
+CONTEXT_RESTRICTED = {'BankAccount'}
+
+
 def scan_text(text, context=''):
     """
     Scan text and return list of findings.
     Each finding includes: raw_value, masked_value, detector, sensitivity, context.
     Feature #7: raw_value contains the actual scanned data.
+    Context-aware: BankAccount only flagged in bank-related columns.
     """
     results = []
     text = str(text)
     seen = set()
+    is_bank_context = bool(BANK_LIKELY_COLS.search(context))
 
     for det in DETECTORS:
         for match in re.finditer(det['pattern'], text):
@@ -158,6 +207,9 @@ def scan_text(text, context=''):
                 if not det['validate'](clean):
                     continue
             except:
+                continue
+            # Skip BankAccount in non-bank columns to reduce false positives
+            if det['name'] in CONTEXT_RESTRICTED and not is_bank_context:
                 continue
             seen.add(key)
             results.append({
