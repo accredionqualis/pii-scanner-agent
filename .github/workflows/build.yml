@@ -26,6 +26,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller psycopg2-binary oracledb mysql-connector-python pymongo pdfplumber pytesseract Pillow requests cryptography
 
+      - name: Verify cryptography works with oracledb
+        run: |
+          python -c "import oracledb; print('oracledb OK')"
+          python -c "from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC; print('cryptography KDF OK')"
+          python -c "import oracledb; oracledb.connect.__doc__; print('oracledb thin mode OK')"
+
       - name: Build EXE
         run: |
           python -m PyInstaller `
@@ -35,13 +41,25 @@ jobs:
             --noconfirm `
             --hidden-import psycopg2 `
             --hidden-import oracledb `
+            --hidden-import oracledb.thin_impl `
+            --hidden-import oracledb.thick_impl `
             --hidden-import mysql.connector `
             --hidden-import pymongo `
             --hidden-import pytesseract `
             --hidden-import pdfplumber `
             --hidden-import PIL `
             --hidden-import cryptography `
+            --hidden-import cryptography.hazmat `
+            --hidden-import cryptography.hazmat.primitives `
+            --hidden-import cryptography.hazmat.primitives.kdf `
+            --hidden-import cryptography.hazmat.primitives.kdf.pbkdf2 `
+            --hidden-import cryptography.hazmat.primitives.kdf.scrypt `
+            --hidden-import cryptography.hazmat.primitives.kdf.hkdf `
+            --hidden-import cryptography.hazmat.backends `
+            --hidden-import cryptography.hazmat.backends.openssl `
+            --hidden-import cryptography.hazmat.bindings `
             --collect-all cryptography `
+            --collect-all oracledb `
             main.py
 
       - name: Verify EXE
@@ -83,13 +101,24 @@ jobs:
             --noconfirm \
             --hidden-import psycopg2 \
             --hidden-import oracledb \
+            --hidden-import oracledb.thin_impl \
+            --hidden-import oracledb.thick_impl \
             --hidden-import mysql.connector \
             --hidden-import pymongo \
             --hidden-import pytesseract \
             --hidden-import pdfplumber \
             --hidden-import PIL \
             --hidden-import cryptography \
+            --hidden-import cryptography.hazmat \
+            --hidden-import cryptography.hazmat.primitives \
+            --hidden-import cryptography.hazmat.primitives.kdf \
+            --hidden-import cryptography.hazmat.primitives.kdf.pbkdf2 \
+            --hidden-import cryptography.hazmat.primitives.kdf.scrypt \
+            --hidden-import cryptography.hazmat.primitives.kdf.hkdf \
+            --hidden-import cryptography.hazmat.backends \
+            --hidden-import cryptography.hazmat.backends.openssl \
             --collect-all cryptography \
+            --collect-all oracledb \
             main.py
 
       - name: Verify binary
@@ -122,50 +151,34 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.${{ github.run_number }}
-          name: "KnightGuard PII Scanner v2.0.${{ github.run_number }}"
+          tag_name: v2.1.${{ github.run_number }}
+          name: "KnightGuard PII Scanner v2.1.${{ github.run_number }}"
           body: |
-            ## KnightGuard GRC PII Scanner Agent v2.0
+            ## KnightGuard GRC PII Scanner Agent v2.1
             **ByteKnight Security Pvt. Ltd.** | knightguardgrc.com
+
+            ### Fixed in v2.1
+            - ✅ Oracle DPY-3016 cryptography error fixed (full cryptography package bundled)
+            - ✅ ORA-12638 Credential retrieval fixed (thin mode)
+            - ✅ Resume — checkpoint every 50 tables
+            - ✅ Per-table 45s timeout — no more stuck scans
+            - ✅ Chunked upload — no more hanging on large results
+            - ✅ Smart sampling — full scan for small tables
+            - ✅ Bank account false positive reduction
+            - ✅ --verbose flag for detailed output
+            - ✅ Heartbeat on status — dashboard shows Online instantly
 
             ### Downloads
             | Platform | File |
             |----------|------|
-            | Windows  | `KnightGuard-PII-Scanner.exe` |
-            | Linux    | `KnightGuard-PII-Scanner-Linux` |
+            | Windows (no install needed) | `KnightGuard-PII-Scanner.exe` |
+            | Linux (no install needed) | `KnightGuard-PII-Scanner-Linux` |
 
-            ### Features
-            - ✅ All major databases: PostgreSQL, MySQL, Oracle, MSSQL, MongoDB, SQLite
-            - ✅ Full offline mode — scan without internet, upload later
-            - ✅ Network database discovery + endpoint/laptop/desktop scanning
-            - ✅ Image OCR — scan Aadhaar cards, PAN cards in images
-            - ✅ Agent activation/deactivation by super admin
-            - ✅ Full raw PII data sent (not just categories)
-            - ✅ Upload offline scan results anytime
-            - ✅ Heartbeat on status — dashboard shows Online instantly
-
-            ### Windows Quick Start
+            ### Oracle Scan
             ```
             KnightGuard-PII-Scanner.exe configure --server https://api.knightguardgrc.com --api-key YOUR_KEY
-            KnightGuard-PII-Scanner.exe status
-            KnightGuard-PII-Scanner.exe discover
-            KnightGuard-PII-Scanner.exe scan-db --db "postgresql://user:pass@host/db"
-            KnightGuard-PII-Scanner.exe scan-db --db "oracle://user:pass@host:1521/ORCL"
-            KnightGuard-PII-Scanner.exe scan-files --path "C:\Users\Documents"
-            KnightGuard-PII-Scanner.exe scan-db --db "postgresql://..." --offline
-            KnightGuard-PII-Scanner.exe upload --file pii_scan_results.json
-            ```
-
-            ### Linux Quick Start
-            ```bash
-            chmod +x KnightGuard-PII-Scanner-Linux
-            ./KnightGuard-PII-Scanner-Linux configure --server https://api.knightguardgrc.com --api-key YOUR_KEY
-            ./KnightGuard-PII-Scanner-Linux status
-            ./KnightGuard-PII-Scanner-Linux discover
-            ./KnightGuard-PII-Scanner-Linux scan-db --db "postgresql://user:pass@host/db"
-            ./KnightGuard-PII-Scanner-Linux scan-files --path /home
-            ./KnightGuard-PII-Scanner-Linux scan-db --db "postgresql://..." --offline
-            ./KnightGuard-PII-Scanner-Linux upload --file pii_scan_results.json
+            KnightGuard-PII-Scanner.exe scan-db --db "oracle://system:password@localhost:1521/XE"
+            KnightGuard-PII-Scanner.exe scan-db --db "oracle://user:pass@192.168.1.10:1521/ORCL" --threads 50 --verbose
             ```
           files: |
             KnightGuard-PII-Scanner.exe
