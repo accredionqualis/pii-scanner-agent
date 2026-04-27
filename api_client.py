@@ -68,7 +68,7 @@ class PIIAgentClient:
           (False, msg)  — deactivated by admin
           (True,  msg)  — error connecting
         """
-        code, resp = self._get('/api/v1/pii-agent/heartbeat/check')
+        code, resp = self._get('/api/v1/pii-scanner/heartbeat/check')
         if code in (200, 201):
             if isinstance(resp, dict) and resp.get('active') is False:
                 return False, 'Deactivated by admin'
@@ -87,7 +87,7 @@ class PIIAgentClient:
             'status': 'online',
             'timestamp': datetime.now().isoformat(),
         }
-        code, resp = self._post('/api/v1/pii-agent/heartbeat', data)
+        code, resp = self._post('/api/v1/pii-scanner/heartbeat', data)
         return code in (200, 201), resp
 
     def submit_findings(self, scan_type, target, findings, offline_data=None):
@@ -110,7 +110,7 @@ class PIIAgentClient:
             payload['original_scan_time'] = offline_data.get('scanned_at')
             payload['offline_upload'] = True
 
-        code, resp = self._post('/api/v1/pii-agent/findings', payload, timeout=120)
+        code, resp = self._post('/api/v1/pii-scanner/findings', payload, timeout=120)
         if code in (200, 201):
             return True, resp
         return False, f'HTTP {code}: {resp}'
