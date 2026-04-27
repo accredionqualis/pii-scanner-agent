@@ -13,7 +13,7 @@ except ImportError:
     def vprint(*a, **k): pass
 
 AGENT_VERSION = '2.1.0'
-CHUNK_SIZE = 500  # findings per batch upload
+CHUNK_SIZE = 50  # findings per batch upload (kept small to avoid 413 entity too large)
 
 
 def _get_local_ip():
