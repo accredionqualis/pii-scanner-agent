@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>KnightGuard PII Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #060810; --bg2: #0c1020; --bg3: #111827;
+  --border: #1e293b; --text: #e2e8f0; --text2: #94a3b8; --text3: #475569;
+  --blue: #3b82f6; --blue2: #1d4ed8; --cyan: #06b6d4;
+  --green: #10b981; --red: #ef4444; --orange: #f59e0b; --purple: #8b5cf6;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Syne', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+body::before {
+  content: ''; position: fixed; inset: 0;
+  background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 40px 40px; opacity: 0.2; pointer-events: none; z-index: 0;
+}
+.wrap { position: relative; z-index: 1; max-width: 1300px; margin: 0 auto; padding: 20px; }
+
+/* Header */
+.hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.hdr-left { display: flex; align-items: center; gap: 14px; }
+.logo { width: 40px; height: 40px; background: linear-gradient(135deg,var(--blue),var(--cyan)); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; box-shadow: 0 0 20px #3b82f630; }
+.title { font-size: 18px; font-weight: 800; }
+.sub { font-size: 10px; color: var(--text3); font-family: 'Space Mono',monospace; }
+.live-badge { display: flex; align-items: center; gap: 6px; background: #10b98115; border: 1px solid #10b98130; padding: 5px 12px; border-radius: 20px; font-size: 10px; font-weight: 700; color: var(--green); font-family: 'Space Mono',monospace; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.8)} }
+
+/* Tabs */
+.tabs { display: flex; gap: 4px; margin-bottom: 20px; background: var(--bg2); padding: 4px; border-radius: 10px; border: 1px solid var(--border); width: fit-content; }
+.tab { padding: 7px 18px; border-radius: 7px; font-size: 12px; font-weight: 700; cursor: pointer; border: none; background: transparent; color: var(--text3); transition: all .2s; font-family: 'Syne',sans-serif; }
+.tab.active { background: var(--blue); color: white; }
+.tab:hover:not(.active) { color: var(--text); }
+.panel { display: none; }
+.panel.active { display: block; }
+
+/* Cards */
+.card { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 16px; }
+.card-hdr { padding: 12px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.card-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; font-family: 'Space Mono',monospace; color: var(--text2); }
+.card-body { padding: 18px; }
+
+/* Form */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.lbl { font-size: 10px; font-weight: 700; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; font-family: 'Space Mono',monospace; }
+.inp { background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 9px 12px; border-radius: 8px; font-family: 'Space Mono',monospace; font-size: 12px; outline: none; transition: border-color .2s; width: 100%; }
+.inp:focus { border-color: var(--blue); }
+select.inp { cursor: pointer; }
+.btn { padding: 10px 22px; border-radius: 8px; border: none; font-family: 'Syne',sans-serif; font-weight: 700; font-size: 13px; cursor: pointer; transition: all .2s; }
+.btn-primary { background: var(--blue); color: white; box-shadow: 0 0 20px #3b82f620; }
+.btn-primary:hover { background: var(--blue2); transform: translateY(-1px); }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+.btn-green { background: var(--green); color: white; }
+.btn-red { background: #ef444420; color: var(--red); border: 1px solid #ef444430; }
+.btn-sm { padding: 6px 14px; font-size: 11px; }
+.btn-ghost { background: var(--bg3); color: var(--text2); border: 1px solid var(--border); }
+.btn-ghost:hover { border-color: var(--blue); color: var(--blue); }
+
+/* KPI */
+.kpi-row { display: grid; grid-template-columns: repeat(6,1fr); gap: 10px; margin-bottom: 16px; }
+.kpi { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; position: relative; overflow: hidden; }
+.kpi::after { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--acc, var(--blue)); }
+.kpi-lbl { font-size: 9px; font-weight: 700; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; font-family: 'Space Mono',monospace; }
+.kpi-val { font-size: 26px; font-weight: 800; color: var(--acc, var(--text)); line-height: 1; }
+.kpi-sub { font-size: 9px; color: var(--text3); font-family: 'Space Mono',monospace; margin-top: 3px; }
+
+/* Terminal */
+.term { background: #050810; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: 'Space Mono',monospace; font-size: 11px; height: 260px; overflow-y: auto; line-height: 1.8; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.lg { display: flex; gap: 10px; }
+.lt { color: var(--text3); flex-shrink: 0; }
+.lm { color: var(--text2); }
+.lm.ok { color: var(--green); } .lm.err { color: var(--red); } .lm.warn { color: var(--orange); }
+.lm.info { color: var(--cyan); } .lm.pii { color: var(--purple); font-weight: 700; } .lm.hd { color: var(--blue); font-weight: 700; }
+
+/* Progress */
+.prog-wrap { margin-bottom: 16px; }
+.prog-lbl { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11px; font-family: 'Space Mono',monospace; }
+.prog-track { background: var(--bg3); border-radius: 4px; height: 8px; overflow: hidden; border: 1px solid var(--border); }
+.prog-fill { height: 100%; background: linear-gradient(90deg,var(--blue),var(--cyan)); border-radius: 4px; transition: width .5s; position: relative; overflow: hidden; }
+.prog-fill::after { content: ''; position: absolute; top: 0; left: -100%; right: 0; bottom: 0; background: linear-gradient(90deg,transparent,rgba(255,255,255,.3),transparent); animation: sh 2s infinite; }
+@keyframes sh { to { left: 100%; } }
+
+/* Findings table */
+.ftbl { width: 100%; border-collapse: collapse; font-size: 11px; }
+.ftbl th { padding: 7px 10px; text-align: left; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text3); font-family: 'Space Mono',monospace; border-bottom: 1px solid var(--border); background: var(--bg3); }
+.ftbl td { padding: 7px 10px; border-bottom: 1px solid var(--border); font-family: 'Space Mono',monospace; }
+.ftbl tr:hover td { background: var(--bg3); }
+.badge { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 9px; font-weight: 700; font-family: 'Space Mono',monospace; }
+.bc { background: #ef444420; color: var(--red); border: 1px solid #ef444430; }
+.bh { background: #f59e0b20; color: var(--orange); border: 1px solid #f59e0b30; }
+.bm { background: #3b82f620; color: var(--blue); border: 1px solid #3b82f630; }
+.bl { background: #10b98120; color: var(--green); border: 1px solid #10b98130; }
+.bt { background: #8b5cf620; color: var(--purple); border: 1px solid #8b5cf630; }
+
+/* Severity bars */
+.sev-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.sev-lbl { font-size: 10px; font-family: 'Space Mono',monospace; width: 60px; }
+.sev-track { flex: 1; background: var(--bg3); border-radius: 3px; height: 5px; overflow: hidden; }
+.sev-fill { height: 100%; border-radius: 3px; transition: width .8s; }
+.sev-n { font-size: 11px; font-weight: 700; font-family: 'Space Mono',monospace; width: 30px; text-align: right; }
+
+/* Main layout */
+.main-grid { display: grid; grid-template-columns: 1fr 300px; gap: 14px; }
+.scroll-tbl { max-height: 320px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.flex-gap { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 14px; }
+
+/* Step indicator */
+.steps { display: flex; gap: 0; margin-bottom: 20px; }
+.step { flex: 1; padding: 10px 14px; font-size: 11px; font-weight: 700; font-family: 'Space Mono',monospace; color: var(--text3); border-bottom: 2px solid var(--border); position: relative; }
+.step.done { color: var(--green); border-color: var(--green); }
+.step.active { color: var(--blue); border-color: var(--blue); }
+.step-n { display: inline-block; width: 20px; height: 20px; border-radius: 50%; border: 2px solid currentColor; text-align: center; line-height: 16px; font-size: 10px; margin-right: 8px; }
+
+/* Masked value pill */
+.mv { display: inline-block; background: var(--bg3); border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; font-family: 'Space Mono',monospace; font-size: 9px; color: var(--purple); margin: 1px; }
+
+/* Drag drop zone */
+.drop-zone { border: 2px dashed var(--border); border-radius: 10px; padding: 30px; text-align: center; cursor: pointer; transition: all .2s; color: var(--text3); font-family: 'Space Mono',monospace; font-size: 12px; }
+.drop-zone:hover, .drop-zone.drag { border-color: var(--blue); color: var(--blue); background: #3b82f608; }
+.drop-icon { font-size: 36px; margin-bottom: 10px; }
+
+/* Info table */
+.info-tbl { width: 100%; font-size: 10px; font-family: 'Space Mono',monospace; line-height: 2; }
+.info-tbl td:first-child { color: var(--text3); }
+.info-tbl td:last-child { text-align: right; color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- Header -->
+<div class="hdr">
+  <div class="hdr-left">
+    <div class="logo">🛡</div>
+    <div>
+      <div class="title">KnightGuard PII Scanner</div>
+      <div class="sub">BYTEKNIGHT SECURITY · BROWSER-NATIVE · NO INSTALLATION REQUIRED</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px">
+    <div class="live-badge"><div class="dot"></div>LIVE</div>
+    <div style="font-size:10px;color:var(--text3);font-family:'Space Mono',monospace" id="clockEl">—</div>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="tabs">
+  <button class="tab active" onclick="showTab('scan')">⚡ Scanner</button>
+  <button class="tab" onclick="showTab('results')">📊 Results</button>
+  <button class="tab" onclick="showTab('history')">📋 History</button>
+  <button class="tab" onclick="showTab('config')">⚙ Config</button>
+</div>
+
+<!-- ══ SCANNER TAB ═══════════════════════════════════════════ -->
+<div id="tab-scan" class="panel active">
+
+  <!-- Steps -->
+  <div class="steps">
+    <div class="step done" id="step1"><span class="step-n">1</span>Configure</div>
+    <div class="step" id="step2"><span class="step-n">2</span>Connect</div>
+    <div class="step" id="step3"><span class="step-n">3</span>Scan</div>
+    <div class="step" id="step4"><span class="step-n">4</span>Upload</div>
+  </div>
+
+  <!-- Quick config -->
+  <div class="card">
+    <div class="card-hdr"><span class="card-title">🔧 Quick Setup</span><span id="connStatus" style="font-size:10px;font-family:'Space Mono',monospace;color:var(--text3)">NOT CONNECTED</span></div>
+    <div class="card-body">
+      <div class="grid3" style="margin-bottom:14px">
+        <div class="field">
+          <div class="lbl">Server URL</div>
+          <input class="inp" id="qServer" placeholder="https://uat-api.knightguardgrc.com" oninput="saveConfig()"/>
+        </div>
+        <div class="field">
+          <div class="lbl">API Key</div>
+          <input class="inp" id="qApiKey" type="password" placeholder="Your agent API key" oninput="saveConfig()"/>
+        </div>
+        <div class="field">
+          <div class="lbl">Database Connection</div>
+          <input class="inp" id="qDb" placeholder="oracle://user:pass@host:1521/XE" oninput="saveConfig()"/>
+        </div>
+      </div>
+      <div class="flex-gap">
+        <div class="field" style="width:160px">
+          <div class="lbl">DB Type</div>
+          <select class="inp" id="qDbType" onchange="updateDbHint()">
+            <option value="oracle">Oracle</option>
+            <option value="postgresql">PostgreSQL</option>
+            <option value="mysql">MySQL</option>
+            <option value="mssql">MSSQL</option>
+            <option value="sqlite">SQLite (.db file)</option>
+            <option value="mongodb">MongoDB</option>
+          </select>
+        </div>
+        <div class="field" style="width:100px">
+          <div class="lbl">Threads</div>
+          <input class="inp" id="qThreads" type="number" value="20" min="1" max="50"/>
+        </div>
+        <div class="field" style="width:120px">
+          <div class="lbl">Max Rows/Table</div>
+          <input class="inp" id="qMaxRows" type="number" value="1000" min="100" max="10000"/>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="testConn()">⚡ Test Connection</button>
+        <button class="btn btn-primary" id="scanBtn" onclick="startScan()">▶ Start Scan</button>
+        <button class="btn btn-red btn-sm" id="stopBtn" onclick="stopScan()" style="display:none">■ Stop</button>
+      </div>
+      <div id="dbHint" style="font-size:10px;color:var(--text3);font-family:'Space Mono',monospace;margin-top:8px"></div>
+    </div>
+  </div>
+
+  <!-- KPIs -->
+  <div class="kpi-row">
+    <div class="kpi" style="--acc:var(--blue)">
+      <div class="kpi-lbl">Tables Scanned</div>
+      <div class="kpi-val" id="kTables">0</div>
+      <div class="kpi-sub" id="kTablesOf">of 0</div>
+    </div>
+    <div class="kpi" style="--acc:var(--purple)">
+      <div class="kpi-lbl">PII Findings</div>
+      <div class="kpi-val" id="kFindings">0</div>
+      <div class="kpi-sub" id="kTypes">0 types</div>
+    </div>
+    <div class="kpi" style="--acc:var(--red)">
+      <div class="kpi-lbl">Critical</div>
+      <div class="kpi-val" id="kCritical">0</div>
+      <div class="kpi-sub">Immediate action</div>
+    </div>
+    <div class="kpi" style="--acc:var(--orange)">
+      <div class="kpi-lbl">DPDP SPDI</div>
+      <div class="kpi-val" id="kSpdi">0</div>
+      <div class="kpi-sub">Sensitive data</div>
+    </div>
+    <div class="kpi" style="--acc:var(--green)">
+      <div class="kpi-lbl">Speed</div>
+      <div class="kpi-val" id="kSpeed">0</div>
+      <div class="kpi-sub">tables/sec</div>
+    </div>
+    <div class="kpi" style="--acc:var(--cyan)">
+      <div class="kpi-lbl">ETA</div>
+      <div class="kpi-val" id="kEta" style="font-size:18px">—</div>
+      <div class="kpi-sub">remaining</div>
+    </div>
+  </div>
+
+  <!-- Main grid: terminal + stats -->
+  <div class="main-grid">
+    <div>
+      <!-- Progress -->
+      <div class="prog-wrap">
+        <div class="prog-lbl">
+          <span id="progText" style="color:var(--text2)">Tables: 0 / 0</span>
+          <span id="progPct" style="color:var(--blue);font-weight:700">0%</span>
+        </div>
+        <div class="prog-track"><div class="prog-fill" id="progBar" style="width:0%"></div></div>
+      </div>
+
+      <!-- Terminal -->
+      <div class="card-title" style="margin-bottom:8px;font-size:10px;font-family:'Space Mono',monospace;color:var(--text3);text-transform:uppercase;letter-spacing:1px">📟 Live Output</div>
+      <div class="term" id="term">
+        <div class="lg"><span class="lt">00:00:00</span><span class="lm info">KnightGuard PII Scanner — Browser Edition</span></div>
+        <div class="lg"><span class="lt">00:00:00</span><span class="lm">No installation required. Enter config above and click Start Scan.</span></div>
+        <div class="lg"><span class="lt">00:00:00</span><span class="lm">💡 You can also drag & drop a pii_scan_*.json file to load offline results.</span></div>
+      </div>
+    </div>
+
+    <!-- Right stats -->
+    <div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-hdr"><span class="card-title">📊 Severity</span></div>
+        <div class="card-body">
+          <div class="sev-bar"><div class="sev-lbl" style="color:var(--red)">CRITICAL</div><div class="sev-track"><div class="sev-fill" id="sC" style="width:0%;background:var(--red)"></div></div><div class="sev-n" id="sCn" style="color:var(--red)">0</div></div>
+          <div class="sev-bar"><div class="sev-lbl" style="color:var(--orange)">HIGH</div><div class="sev-track"><div class="sev-fill" id="sH" style="width:0%;background:var(--orange)"></div></div><div class="sev-n" id="sHn" style="color:var(--orange)">0</div></div>
+          <div class="sev-bar"><div class="sev-lbl" style="color:var(--blue)">MEDIUM</div><div class="sev-track"><div class="sev-fill" id="sM" style="width:0%;background:var(--blue)"></div></div><div class="sev-n" id="sMn" style="color:var(--blue)">0</div></div>
+          <div class="sev-bar"><div class="sev-lbl" style="color:var(--green)">LOW</div><div class="sev-track"><div class="sev-fill" id="sL" style="width:0%;background:var(--green)"></div></div><div class="sev-n" id="sLn" style="color:var(--green)">0</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hdr"><span class="card-title">🔍 Detectors</span></div>
+        <div class="card-body" style="padding:12px"><div id="detList"><div style="color:var(--text3);font-size:10px;font-family:'Space Mono',monospace;text-align:center;padding:20px 0">No findings yet</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Drop zone -->
+  <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+    <div class="drop-icon">📂</div>
+    <div>Drop <code>pii_scan_*.json</code> here to load offline results</div>
+    <div style="font-size:10px;margin-top:6px;color:var(--text3)">Or click to browse</div>
+    <input type="file" id="fileInput" accept=".json" style="display:none" onchange="loadJsonFile(this)"/>
+  </div>
+</div>
+
+<!-- ══ RESULTS TAB ════════════════════════════════════════════ -->
+<div id="tab-results" class="panel">
+  <div class="card">
+    <div class="card-hdr">
+      <span class="card-title">🔎 All Findings</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select class="inp" id="filterSev" style="padding:4px 8px;font-size:11px;width:auto" onchange="renderFindings()">
+          <option value="">All Severity</option>
+          <option value="CRITICAL">Critical</option>
+          <option value="HIGH">High</option>
+          <option value="MEDIUM">Medium</option>
+          <option value="LOW">Low</option>
+        </select>
+        <select class="inp" id="filterDet" style="padding:4px 8px;font-size:11px;width:auto" onchange="renderFindings()">
+          <option value="">All Types</option>
+        </select>
+        <button class="btn btn-sm btn-ghost" onclick="exportCsv()">⬇ CSV</button>
+        <button class="btn btn-sm btn-ghost" onclick="exportJson()">⬇ JSON</button>
+      </div>
+    </div>
+    <div class="scroll-tbl" style="max-height:500px">
+      <table class="ftbl">
+        <thead><tr><th>#</th><th>Type</th><th>Table</th><th>Column</th><th>Count</th><th>Severity</th><th>DPDP</th><th>Masked Values</th></tr></thead>
+        <tbody id="findingsTbody"><tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text3);font-family:'Space Mono',monospace;font-size:11px">Run a scan or load a JSON file to see findings</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ══ HISTORY TAB ════════════════════════════════════════════ -->
+<div id="tab-history" class="panel">
+  <div class="card">
+    <div class="card-hdr">
+      <span class="card-title">📋 Scan History</span>
+      <button class="btn btn-red btn-sm" onclick="clearHistory()">Clear All</button>
+    </div>
+    <div class="card-body">
+      <div id="historyBody"><div style="color:var(--text3);font-family:'Space Mono',monospace;font-size:11px;text-align:center;padding:40px 0">No scan history yet</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ CONFIG TAB ═════════════════════════════════════════════ -->
+<div id="tab-config" class="panel">
+  <div class="card">
+    <div class="card-hdr"><span class="card-title">⚙ Agent Configuration</span></div>
+    <div class="card-body">
+      <div class="grid2" style="margin-bottom:14px">
+        <div class="field"><div class="lbl">Server URL</div><input class="inp" id="cfgServer" placeholder="https://api.knightguardgrc.com" oninput="syncConfig()"/></div>
+        <div class="field"><div class="lbl">API Key</div><input class="inp" id="cfgApiKey" type="text" placeholder="Paste full API key here" oninput="syncConfig()"/></div>
+      </div>
+      <div class="grid2" style="margin-bottom:14px">
+        <div class="field"><div class="lbl">Agent Name</div><input class="inp" id="cfgName" placeholder="My-Scanner-Agent" oninput="syncConfig()"/></div>
+        <div class="field"><div class="lbl">Default Threads</div><input class="inp" id="cfgThreads" type="number" value="20" oninput="syncConfig()"/></div>
+      </div>
+      <div class="flex-gap">
+        <button class="btn btn-primary" onclick="testConn()">⚡ Test Connection</button>
+        <button class="btn btn-ghost" onclick="sendHeartbeat()">💓 Send Heartbeat</button>
+        <button class="btn btn-red btn-sm" onclick="clearConfig()">🗑 Clear Config</button>
+      </div>
+
+      <div style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border)">
+        <div class="card-title" style="margin-bottom:12px">📖 DB Connection String Examples</div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;line-height:2.2;color:var(--text2)">
+          <div><span style="color:var(--orange)">Oracle   </span> oracle://username:password@192.168.1.10:1521/XE</div>
+          <div><span style="color:var(--orange)">Oracle   </span> oracle://username:password@192.168.1.10:1521/ORCL</div>
+          <div><span style="color:var(--blue)">Postgres </span> postgresql://username:password@192.168.1.10/mydb</div>
+          <div><span style="color:var(--green)">MySQL    </span> mysql://username:password@192.168.1.10/mydb</div>
+          <div><span style="color:var(--red)">MSSQL    </span> mssql://username:password@192.168.1.10/master</div>
+          <div><span style="color:var(--cyan)">MongoDB  </span> mongodb://username:password@192.168.1.10/mydb</div>
+          <div><span style="color:var(--purple)">SQLite   </span> /path/to/database.db (or C:\path\to\database.db)</div>
+        </div>
+      </div>
+
+      <div style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border)">
+        <div class="card-title" style="margin-bottom:12px">⬇ Download Agent (Python)</div>
+        <div style="font-size:11px;color:var(--text2);font-family:'Space Mono',monospace;line-height:2">
+          <div>GitHub: <a href="https://github.com/accredionqualis/pii-scanner-agent/releases/latest" target="_blank" style="color:var(--blue)">Latest Release →</a></div>
+          <div style="margin-top:8px">Windows: <code style="background:var(--bg3);padding:2px 8px;border-radius:4px">KnightGuard-PII-Scanner.exe</code></div>
+          <div>Linux:   <code style="background:var(--bg3);padding:2px 8px;border-radius:4px">KnightGuard-PII-Scanner-Linux</code></div>
+          <div style="margin-top:8px;color:var(--text3)">Or run from Python source:</div>
+          <div><code style="background:var(--bg3);padding:2px 8px;border-radius:4px">pip install oracledb cryptography psycopg2-binary requests</code></div>
+          <div><code style="background:var(--bg3);padding:2px 8px;border-radius:4px">python main.py scan-db --db "oracle://..." --threads 50</code></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /wrap -->
+
+<script>
+// ── State ──────────────────────────────────────────────────────
+const S = {
+  findings: [],
+  severity: {CRITICAL:0,HIGH:0,MEDIUM:0,LOW:0},
+  detectors: {},
+  spdi: 0,
+  scanning: false,
+  startTime: null,
+  pollTimer: null,
+  clockTimer: null,
+  lastScanId: null,
+};
+
+// ── Init ───────────────────────────────────────────────────────
+window.onload = () => {
+  loadConfig();
+  updateDbHint();
+  renderHistory();
+  S.clockTimer = setInterval(() => {
+    document.getElementById('clockEl').textContent = new Date().toTimeString().slice(0,8);
+  }, 1000);
+
+  // Drag & drop
+  const dz = document.getElementById('dropZone');
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+  dz.addEventListener('drop', e => {
+    e.preventDefault(); dz.classList.remove('drag');
+    const f = e.dataTransfer.files[0];
+    if (f) loadJsonFileObj(f);
+  });
+
+  // Global drop
+  document.addEventListener('dragover', e => e.preventDefault());
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    const f = e.dataTransfer.files[0];
+    if (f && f.name.endsWith('.json')) loadJsonFileObj(f);
+  });
+};
+
+// ── Config persistence ─────────────────────────────────────────
+function saveConfig() {
+  const cfg = {
+    server: document.getElementById('qServer').value,
+    apiKey: document.getElementById('qApiKey').value,
+    db: document.getElementById('qDb').value,
+    threads: document.getElementById('qThreads').value,
+    maxRows: document.getElementById('qMaxRows').value,
+  };
+  localStorage.setItem('kg_cfg', JSON.stringify(cfg));
+  syncConfig();
+}
+
+function loadConfig() {
+  try {
+    const cfg = JSON.parse(localStorage.getItem('kg_cfg') || '{}');
+    if (cfg.server) { document.getElementById('qServer').value = cfg.server; document.getElementById('cfgServer').value = cfg.server; }
+    if (cfg.apiKey) { document.getElementById('qApiKey').value = cfg.apiKey; document.getElementById('cfgApiKey').value = cfg.apiKey; }
+    if (cfg.db) document.getElementById('qDb').value = cfg.db;
+    if (cfg.threads) document.getElementById('qThreads').value = cfg.threads;
+    if (cfg.maxRows) document.getElementById('qMaxRows').value = cfg.maxRows;
+    if (cfg.name) document.getElementById('cfgName').value = cfg.name;
+  } catch(e) {}
+}
+
+function syncConfig() {
+  const s = document.getElementById('cfgServer').value || document.getElementById('qServer').value;
+  const k = document.getElementById('cfgApiKey').value || document.getElementById('qApiKey').value;
+  document.getElementById('qServer').value = s;
+  document.getElementById('qApiKey').value = k;
+  document.getElementById('cfgServer').value = s;
+  document.getElementById('cfgApiKey').value = k;
+  saveConfig();
+}
+
+function clearConfig() {
+  if (!confirm('Clear all saved configuration?')) return;
+  localStorage.removeItem('kg_cfg');
+  ['qServer','qApiKey','qDb','cfgServer','cfgApiKey','cfgName'].forEach(id => document.getElementById(id).value = '');
+  log('Config cleared', 'warn');
+}
+
+// ── Tabs ───────────────────────────────────────────────────────
+function showTab(t) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + t).classList.add('active');
+  event.target.classList.add('active');
+}
+
+// ── Logging ────────────────────────────────────────────────────
+function ts() { return new Date().toTimeString().slice(0,8); }
+
+function log(msg, cls='') {
+  const t = document.getElementById('term');
+  const d = document.createElement('div');
+  d.className = 'lg';
+  d.innerHTML = `<span class="lt">${ts()}</span><span class="lm ${cls}">${msg}</span>`;
+  t.appendChild(d);
+  t.scrollTop = t.scrollHeight;
+  while (t.children.length > 300) t.removeChild(t.firstChild);
+}
+
+// ── DB hint ────────────────────────────────────────────────────
+function updateDbHint() {
+  const hints = {
+    oracle: 'oracle://username:password@HOST:1521/SERVICENAME (e.g. XE, ORCL, XEPDB1)',
+    postgresql: 'postgresql://username:password@HOST:5432/DATABASE',
+    mysql: 'mysql://username:password@HOST:3306/DATABASE',
+    mssql: 'mssql://username:password@HOST:1433/DATABASE',
+    sqlite: '/full/path/to/database.db  or  C:\\path\\to\\database.db',
+    mongodb: 'mongodb://username:password@HOST:27017/DATABASE',
+  };
+  const t = document.getElementById('qDbType').value;
+  document.getElementById('dbHint').textContent = '→ Format: ' + (hints[t]||'');
+}
+
+// ── Connection test ────────────────────────────────────────────
+async function testConn() {
+  const server = (document.getElementById('qServer').value || document.getElementById('cfgServer').value).trim();
+  if (!server) { log('Enter Server URL first', 'err'); return; }
+  log(`Testing connection to ${server}...`, 'info');
+  try {
+    const r = await fetch(server + '/api/v1/health', { signal: AbortSignal.timeout(8000) });
+    const d = await r.json();
+    if (d.status === 'ok') {
+      log('✓ Server connected and healthy', 'ok');
+      document.getElementById('connStatus').textContent = 'CONNECTED ✓';
+      document.getElementById('connStatus').style.color = 'var(--green)';
+      setStep(2);
+    } else {
+      log('⚠ Server responded: ' + JSON.stringify(d), 'warn');
+    }
+  } catch(e) {
+    log('✗ Connection failed: ' + e.message, 'err');
+    document.getElementById('connStatus').textContent = 'FAILED ✗';
+    document.getElementById('connStatus').style.color = 'var(--red)';
+  }
+}
+
+// ── Heartbeat ─────────────────────────────────────────────────
+async function sendHeartbeat() {
+  const server = document.getElementById('qServer').value.trim();
+  const apiKey = document.getElementById('qApiKey').value.trim();
+  if (!server || !apiKey) { log('Enter server URL and API key first', 'err'); return; }
+  try {
+    const r = await fetch(server + '/api/v1/pii-scanner/heartbeat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+      body: JSON.stringify({ hostname: window.location.hostname || 'browser', ip_address: '', platform: 'Browser', version: '2.1.0-ui', status: 'online' }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (r.ok) { log('✓ Heartbeat sent — agent shows Online in dashboard', 'ok'); }
+    else { log('⚠ Heartbeat failed: HTTP ' + r.status, 'warn'); }
+  } catch(e) { log('✗ Heartbeat error: ' + e.message, 'err'); }
+}
+
+// ── Steps ──────────────────────────────────────────────────────
+function setStep(n) {
+  for (let i = 1; i <= 4; i++) {
+    const el = document.getElementById('step'+i);
+    el.className = 'step' + (i < n ? ' done' : i === n ? ' active' : '');
+  }
+}
+
+// ── Start scan (polls platform for results) ───────────────────
+async function startScan() {
+  const server = document.getElementById('qServer').value.trim();
+  const apiKey = document.getElementById('qApiKey').value.trim();
+  const db = document.getElementById('qDb').value.trim();
+  const threads = document.getElementById('qThreads').value || 20;
+  const maxRows = document.getElementById('qMaxRows').value || 1000;
+
+  if (!server) { log('Enter Server URL', 'err'); return; }
+  if (!apiKey) { log('Enter API Key', 'err'); return; }
+
+  // Reset
+  S.findings = []; S.severity = {CRITICAL:0,HIGH:0,MEDIUM:0,LOW:0};
+  S.detectors = {}; S.spdi = 0; S.scanning = true; S.startTime = Date.now();
+  setKpi('kFindings',0); setKpi('kCritical',0); setKpi('kSpdi',0); setKpi('kSpeed',0);
+  document.getElementById('progBar').style.width = '0%';
+  document.getElementById('findingsTbody').innerHTML = '';
+
+  document.getElementById('scanBtn').disabled = true;
+  document.getElementById('stopBtn').style.display = '';
+  setStep(3);
+
+  log('═══════════════════════════════════════', 'hd');
+  log('▶ SCAN SESSION STARTED', 'hd');
+  log(`Server : ${server}`, 'info');
+  log(`DB     : ${db || '(from agent config)'}`, 'info');
+  log(`Threads: ${threads} parallel`, 'info');
+  log('═══════════════════════════════════════', 'hd');
+
+  // Send heartbeat
+  await sendHeartbeat();
+
+  // Tell user how to run agent
+  log('', '');
+  log('📋 Run this command on your machine:', 'info');
+  if (db) {
+    log(`python main.py scan-db --db "${db}" --threads ${threads} --max-rows ${maxRows}`, 'hd');
+  } else {
+    log('python main.py scan-db --db "YOUR_CONNECTION_STRING" --threads ' + threads, 'hd');
+  }
+  log('', '');
+  log('⏳ Polling platform for results every 5 seconds...', 'info');
+  log('(Or drag & drop the pii_scan_*.json file here when done)', 'info');
+
+  // Poll every 5 seconds
+  S.pollTimer = setInterval(() => pollResults(server, apiKey), 5000);
+
+  // Update elapsed timer
+  S.elapsedTimer = setInterval(() => {
+    if (!S.startTime) return;
+    const e = Math.floor((Date.now() - S.startTime) / 1000);
+    const m = Math.floor(e/60), s = e%60;
+    document.getElementById('kEta').textContent = m>0 ? `${m}m${s}s` : `${s}s`;
+  }, 1000);
+}
+
+async function pollResults(server, apiKey) {
+  try {
+    const r = await fetch(server + '/api/v1/pii-scanner/scans', {
+      headers: { 'x-api-key': apiKey },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) return;
+    const scans = await r.json();
+    if (!Array.isArray(scans) || !scans.length) return;
+
+    const latest = scans[0];
+    if (!latest || latest.id === S.lastScanId) return;
+    if (latest.status !== 'completed' || !latest.total_findings) return;
+
+    S.lastScanId = latest.id;
+    log('═══════════════════════════════════════', 'hd');
+    log('✓ NEW SCAN COMPLETED DETECTED!', 'ok');
+    log(`Scan ID  : ${latest.id.slice(0,8).toUpperCase()}`, 'info');
+    log(`Target   : ${(latest.target||'').replace(/:[^@]+@/,':***@')}`, 'info');
+    log(`Findings : ${latest.total_findings}`, 'pii');
+    log(`Critical : ${latest.critical_findings}`, latest.critical_findings > 0 ? 'err' : 'ok');
+    log(`Agent    : ${latest.agent_name}`, 'info');
+
+    setKpi('kFindings', latest.total_findings);
+    setKpi('kCritical', latest.critical_findings);
+    setKpi('kSpdi', latest.dpdp_spdi_findings);
+    setStep(4);
+
+    // Load findings
+    await loadFindings(server, apiKey, latest);
+    renderHistory();
+
+  } catch(e) {}
+}
+
+async function loadFindings(server, apiKey, scan) {
+  try {
+    const r = await fetch(server + '/api/v1/pii-scanner/findings', {
+      headers: { 'x-api-key': apiKey },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    const findings = Array.isArray(data) ? data : (data.findings || []);
+
+    findings.forEach(f => {
+      S.findings.push(f);
+      const det = (f.detector_name || f.detector || '?').toUpperCase();
+      S.detectors[det] = (S.detectors[det]||0) + (f.sample_count||1);
+      const sv = (f.sensitivity||'LOW').toUpperCase();
+      if (S.severity[sv] !== undefined) S.severity[sv]++;
+      if (f.is_dpdp_spdi) S.spdi++;
+      if (S.findings.length <= 20) log(`PII: ${det} @ ${(f.table_name||'').split('.').pop()}.${f.column_name||'—'} (${f.sample_count||0} records)`, 'pii');
+    });
+
+    if (findings.length > 20) log(`... and ${findings.length - 20} more findings`, 'info');
+    setKpi('kFindings', findings.length);
+    setKpi('kCritical', S.severity.CRITICAL);
+    setKpi('kSpdi', S.spdi);
+    document.getElementById('kTypes').textContent = Object.keys(S.detectors).length + ' types';
+    updateSevBars();
+    updateDetectors();
+    renderFindings();
+
+    log('═══════════════════════════════════════', 'hd');
+    log('✓ All findings loaded. View in Results tab.', 'ok');
+    if (S.severity.CRITICAL > 0) log('⚠ CRITICAL PII detected — immediate action required!', 'err');
+
+    stopScan(true);
+  } catch(e) {
+    log('Could not load findings: ' + e.message, 'warn');
+  }
+}
+
+function stopScan(silent=false) {
+  S.scanning = false;
+  clearInterval(S.pollTimer);
+  clearInterval(S.elapsedTimer);
+  document.getElementById('scanBtn').disabled = false;
+  document.getElementById('stopBtn').style.display = 'none';
+  if (!silent) { log('■ Polling stopped', 'warn'); setStep(1); }
+}
+
+// ── KPI helper ─────────────────────────────────────────────────
+function setKpi(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+// ── Severity bars ──────────────────────────────────────────────
+function updateSevBars() {
+  const max = Math.max(...Object.values(S.severity), 1);
+  [['C','CRITICAL'],['H','HIGH'],['M','MEDIUM'],['L','LOW']].forEach(([k,v]) => {
+    const n = S.severity[v] || 0;
+    document.getElementById('s'+k).style.width = Math.round(n/max*100)+'%';
+    document.getElementById('s'+k+'n').textContent = n;
+  });
+}
+
+// ── Detectors ──────────────────────────────────────────────────
+function updateDetectors() {
+  const entries = Object.entries(S.detectors).sort((a,b)=>b[1]-a[1]);
+  if (!entries.length) return;
+  const max = entries[0][1];
+  document.getElementById('detList').innerHTML = entries.map(([k,v]) =>
+    `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <div style="font-size:10px;font-family:'Space Mono',monospace;color:var(--text2);flex:1">${k}</div>
+      <div style="width:60px;background:var(--bg3);border-radius:3px;height:4px;overflow:hidden"><div style="width:${Math.round(v/max*100)}%;height:100%;background:linear-gradient(90deg,var(--purple),var(--blue))"></div></div>
+      <div style="font-size:10px;font-weight:700;font-family:'Space Mono',monospace;width:24px;text-align:right">${v}</div>
+    </div>`
+  ).join('');
+}
+
+// ── Findings table ─────────────────────────────────────────────
+function renderFindings() {
+  const sevF = document.getElementById('filterSev').value;
+  const detF = document.getElementById('filterDet').value;
+
+  // Update detector filter options
+  const detSel = document.getElementById('filterDet');
+  const curDet = detSel.value;
+  detSel.innerHTML = '<option value="">All Types</option>' +
+    Object.keys(S.detectors).sort().map(d => `<option value="${d}" ${d===curDet?'selected':''}>${d}</option>`).join('');
+
+  const filtered = S.findings.filter(f => {
+    const sv = (f.sensitivity||'LOW').toUpperCase();
+    const det = (f.detector_name||f.detector||'?').toUpperCase();
+    return (!sevF || sv === sevF) && (!detF || det === detF);
+  });
+
+  if (!filtered.length) {
+    document.getElementById('findingsTbody').innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text3);font-family:\'Space Mono\',monospace">No findings match filter</td></tr>';
+    return;
+  }
+
+  document.getElementById('findingsTbody').innerHTML = filtered.map((f,i) => {
+    const sv = (f.sensitivity||'LOW').toUpperCase();
+    const bc = {CRITICAL:'bc',HIGH:'bh',MEDIUM:'bm',LOW:'bl'}[sv]||'bl';
+    const samples = (f.masked_values||f.sample_values||[]).slice(0,8).map(s=>`<span class="mv">${s}</span>`).join('');
+    const tbl = (f.table_name||f.file_path||'—').split('.').pop();
+    return `<tr>
+      <td style="color:var(--text3)">${i+1}</td>
+      <td><span class="badge bt">${(f.detector_name||f.detector||'?').toUpperCase()}</span></td>
+      <td style="color:var(--text2);font-size:10px">${tbl}</td>
+      <td style="color:var(--purple);font-size:10px">${f.column_name||'—'}</td>
+      <td style="font-weight:700">${f.sample_count||0}</td>
+      <td><span class="badge ${bc}">${sv}</span></td>
+      <td style="text-align:center;color:${f.is_dpdp_spdi?'var(--purple)':'var(--text3)';}">${f.is_dpdp_spdi?'✓':'—'}</td>
+      <td>${samples||'<span style="color:var(--text3);font-size:9px">—</span>'}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Load JSON file ─────────────────────────────────────────────
+function loadJsonFile(input) {
+  const f = input.files[0];
+  if (f) loadJsonFileObj(f);
+}
+
+function loadJsonFileObj(file) {
+  log(`Loading ${file.name}...`, 'info');
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      const findings = data.findings || [];
+      S.findings = []; S.severity = {CRITICAL:0,HIGH:0,MEDIUM:0,LOW:0}; S.detectors = {}; S.spdi = 0;
+
+      findings.forEach(f => {
+        S.findings.push(f);
+        const det = (f.detector||f.detector_name||'?').toUpperCase();
+        S.detectors[det] = (S.detectors[det]||0)+(f.sample_count||1);
+        const sv = (f.sensitivity||'LOW').toUpperCase();
+        if (S.severity[sv]!==undefined) S.severity[sv]++;
+        if (f.dpdp_spdi||f.is_dpdp_spdi) S.spdi++;
+      });
+
+      setKpi('kFindings', findings.length);
+      setKpi('kCritical', S.severity.CRITICAL);
+      setKpi('kSpdi', S.spdi);
+      document.getElementById('kTypes').textContent = Object.keys(S.detectors).length + ' types';
+      updateSevBars();
+      updateDetectors();
+      renderFindings();
+
+      log(`✓ Loaded ${findings.length} findings from ${file.name}`, 'ok');
+      log(`Critical: ${S.severity.CRITICAL} | High: ${S.severity.HIGH} | Medium: ${S.severity.MEDIUM} | Low: ${S.severity.LOW}`, 'info');
+      log(`DPDP SPDI: ${S.spdi} | Detector types: ${Object.keys(S.detectors).length}`, 'pii');
+
+      // Save to history
+      const hist = JSON.parse(localStorage.getItem('kg_history')||'[]');
+      hist.unshift({ file: file.name, findings: findings.length, critical: S.severity.CRITICAL, spdi: S.spdi, ts: new Date().toISOString() });
+      localStorage.setItem('kg_history', JSON.stringify(hist.slice(0,20)));
+      renderHistory();
+
+      setStep(4);
+    } catch(err) {
+      log('✗ Failed to parse JSON: ' + err.message, 'err');
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ── History ────────────────────────────────────────────────────
+function renderHistory() {
+  const hist = JSON.parse(localStorage.getItem('kg_history')||'[]');
+  if (!hist.length) {
+    document.getElementById('historyBody').innerHTML = '<div style="color:var(--text3);font-family:\'Space Mono\',monospace;font-size:11px;text-align:center;padding:40px 0">No scan history yet</div>';
+    return;
+  }
+  document.getElementById('historyBody').innerHTML = hist.map((h,i) => {
+    const icon = h.critical > 0 ? '🔴' : h.findings > 0 ? '🟡' : '🟢';
+    const dt = new Date(h.ts).toLocaleString();
+    return `<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)">
+      <span style="font-size:18px">${icon}</span>
+      <div style="flex:1">
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--text2)">${h.file||h.target||'—'}</div>
+        <div style="font-size:10px;color:var(--text3);font-family:'Space Mono',monospace;margin-top:2px">${dt} · SPDI: ${h.spdi||0}</div>
+      </div>
+      <div style="font-weight:800;font-size:16px;color:${h.critical>0?'var(--red)':h.findings>0?'var(--orange)':'var(--green)'}">${h.findings}</div>
+    </div>`;
+  }).join('');
+}
+
+function clearHistory() {
+  if (!confirm('Clear all scan history?')) return;
+  localStorage.removeItem('kg_history');
+  renderHistory();
+  log('History cleared', 'warn');
+}
+
+// ── Export ─────────────────────────────────────────────────────
+function exportCsv() {
+  if (!S.findings.length) { log('No findings to export', 'warn'); return; }
+  const hdr = 'Detector,Table,Column,Count,Severity,DPDP_SPDI,Masked_Values\n';
+  const rows = S.findings.map(f =>
+    [f.detector_name||f.detector,f.table_name,f.column_name,f.sample_count,f.sensitivity,
+     f.is_dpdp_spdi?'YES':'NO',
+     (f.masked_values||f.sample_values||[]).join('|')
+    ].map(v => '"'+(v||'').toString().replace(/"/g,'""')+'"').join(',')
+  ).join('\n');
+  download('pii_findings.csv', hdr+rows, 'text/csv');
+  log(`Exported ${S.findings.length} findings to CSV`, 'ok');
+}
+
+function exportJson() {
+  if (!S.findings.length) { log('No findings to export', 'warn'); return; }
+  download('pii_findings.json', JSON.stringify({findings:S.findings,summary:S.severity,spdi:S.spdi,exported:new Date().toISOString()},null,2), 'application/json');
+  log(`Exported ${S.findings.length} findings to JSON`, 'ok');
+}
+
+function download(name, content, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([content],{type}));
+  a.download = name; a.click();
+}
+</script>
+</body>
+</html>
