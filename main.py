@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 CONFIG_FILE = Path.home() / '.knightguard_agent.json'
-AGENT_VERSION = '2.0.0'
+AGENT_VERSION = '2.1.0'
 BANNER = """
 ╔══════════════════════════════════════════════════════════════╗
 ║   KnightGuard GRC — PII Scanner Agent v2.0                  ║

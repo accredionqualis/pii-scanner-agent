@@ -8,7 +8,7 @@ import socket
 import time
 from datetime import datetime
 
-AGENT_VERSION = '2.0.0'
+AGENT_VERSION = '2.1.0'
 CHUNK_SIZE = 500  # findings per batch upload
 
 

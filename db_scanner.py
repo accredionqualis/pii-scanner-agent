@@ -338,22 +338,9 @@ def _scan_oracle_table(args):
     dsn, user, pwd, owner, table, columns, max_rows = args
     findings = []
     try:
-        import oracledb
-        # Force thin mode — avoids ORA-12638 NTS credential error
-        # Thin mode needs no Oracle client installed
-        try:
-            conn = oracledb.connect(user=user, password=pwd, dsn=dsn)
-        except Exception as e1:
-            if '12638' in str(e1) or 'Credential' in str(e1):
-                # Try thick mode with NTS disabled
-                try:
-                    oracledb.init_oracle_client()
-                    conn = oracledb.connect(user=user, password=pwd, dsn=dsn,
-                                           mode=oracledb.DEFAULT_AUTH)
-                except Exception:
-                    raise e1
-            else:
-                raise e1
+        import oracledb, os
+        os.environ['ORA_PYTHON_DRIVER_TYPE'] = 'thin'
+        conn = oracledb.connect(user=user, password=pwd, dsn=dsn)
         cur = conn.cursor()
         columns = sorted(
             [c for c in columns if _should_scan_column(c)],
@@ -393,15 +380,12 @@ def scan_oracle(conn_str, max_rows, threads=20):
     port = int(port or 1521); service = service or 'ORCL'
     dsn = f"{host}:{port}/{service}"
     print(f"  Connecting to Oracle {dsn}...")
-    # Thin mode first (avoids ORA-12638)
-    try:
-        conn = oracledb.connect(user=user, password=pwd, dsn=dsn)
-    except Exception as e:
-        if '12638' in str(e) or 'Credential' in str(e):
-            oracledb.init_oracle_client()
-            conn = oracledb.connect(user=user, password=pwd, dsn=dsn)
-        else:
-            raise
+    # Force thin mode — pure Python, no Oracle client, no ORA-12638 NTS issue
+    import os
+    os.environ['ORA_PYTHON_DRIVER_TYPE'] = 'thin'
+    # oracledb thin mode is default in v1.x — never call init_oracle_client()
+    # This avoids ORA-12638 Credential retrieval failed (Windows NTS auth)
+    conn = oracledb.connect(user=user, password=pwd, dsn=dsn)
     cur = conn.cursor()
     sql = """SELECT owner, table_name, column_name FROM all_tab_columns
              WHERE data_type IN ({}) AND owner NOT IN ({})
