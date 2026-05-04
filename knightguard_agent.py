@@ -164,7 +164,7 @@ def scan_oracle(host, port, service_name, username, password, sample_size=100):
             SELECT t.owner, t.table_name, c.column_name, c.data_type
             FROM all_tables t
             JOIN all_tab_columns c ON c.owner=t.owner AND c.table_name=t.table_name
-            WHERE t.owner NOT IN ('SYS','SYSTEM','OUTLN','DBSNMP','APPQOSSYS',
+            WHERE t.owner NOT IN ('SYS','OUTLN','DBSNMP','APPQOSSYS',
                 'DBSFWUSER','GGSYS','ANONYMOUS','CTXSYS','DVSYS','GSMADMIN_INTERNAL',
                 'LBACSYS','MDSYS','OJVMSYS','OLAPSYS','ORDDATA','ORDSYS','SI_INFORMTN_SCHEMA',
                 'WMSYS','XDB','APEX_PUBLIC_USER','FLOWS_FILES')
