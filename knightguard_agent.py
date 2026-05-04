@@ -192,13 +192,19 @@ def scan_oracle(host, port, service_name, username, password, sample_size=100):
                     'sample_count': 0,
                 })
             
-            # Sample data from text columns
-            if dtype in ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'CLOB') and full_table not in tables_done:
+            # Sample data from text AND numeric columns (convert to string)
+            if dtype in ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'CLOB', 'NUMBER', 'DATE', 'TIMESTAMP'):
                 try:
-                    cur.execute(f'SELECT "{column}" FROM "{owner}"."{table}" WHERE ROWNUM <= {sample_size} AND "{column}" IS NOT NULL')
+                    if dtype in ('NUMBER',):
+                        cur.execute(f'SELECT TO_CHAR("{column}") FROM "{owner}"."{table}" WHERE ROWNUM <= {sample_size} AND "{column}" IS NOT NULL')
+                    elif dtype in ('DATE', 'TIMESTAMP'):
+                        cur.execute(f'SELECT TO_CHAR("{column}", \'YYYY-MM-DD\') FROM "{owner}"."{table}" WHERE ROWNUM <= {sample_size} AND "{column}" IS NOT NULL')
+                    else:
+                        cur.execute(f'SELECT "{column}" FROM "{owner}"."{table}" WHERE ROWNUM <= {sample_size} AND "{column}" IS NOT NULL')
                     rows = cur.fetchall()
                     for row in rows:
-                        pii_found = detect_pii_in_text(row[0])
+                        val = str(row[0]) if row[0] is not None else ''
+                        pii_found = detect_pii_in_text(val)
                         for pii in pii_found:
                             findings.append({
                                 'table_name': full_table,
@@ -211,8 +217,6 @@ def scan_oracle(host, port, service_name, username, password, sample_size=100):
                             })
                 except:
                     pass
-        
-        tables_done.add(full_table)
     except Exception as e:
         print(f"  Warning during scan: {e}")
     finally:
