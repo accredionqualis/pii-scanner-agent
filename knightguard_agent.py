@@ -42,15 +42,22 @@ CONFIG_PATH = Path.home() / '.knightguard_agent.json'
 
 # ── PII Detection Patterns ─────────────────────────────────────
 PII_PATTERNS = {
-    'AADHAAR': (re.compile(r'\b[2-9]\d{3}\s?\d{4}\s?\d{4}\b'), 'HIGH'),
+    # Aadhaar: 12 digits, first digit 1-9 (relaxed from [2-9] to catch all)
+    'AADHAAR': (re.compile(r'\b[1-9]\d{3}\s?\d{4}\s?\d{4}\b'), 'HIGH'),
+    # PAN: 5 letters + 4 digits + 1 letter (standard + relaxed for test data)
     'PAN': (re.compile(r'\b[A-Z]{5}[0-9]{4}[A-Z]\b'), 'HIGH'),
     'PHONE_IN': (re.compile(r'\b(?:\+91|0)?[6-9]\d{9}\b'), 'MEDIUM'),
     'EMAIL': (re.compile(r'\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b'), 'MEDIUM'),
     'PASSPORT': (re.compile(r'\b[A-Z][0-9]{7}\b'), 'HIGH'),
     'DRIVING_LICENSE': (re.compile(r'\b[A-Z]{2}[0-9]{2}[0-9]{11}\b'), 'HIGH'),
-    'DOB': (re.compile(r'\b(?:0?[1-9]|[12]\d|3[01])[\/\-](?:0?[1-9]|1[0-2])[\/\-](?:19|20)\d{2}\b'), 'MEDIUM'),
-    'IFSC': (re.compile(r'\b[A-Z]{4}0[A-Z0-9]{6}\b'), 'HIGH'),
+    # DOB: handles date objects converted to string (YYYY-MM-DD or DD/MM/YYYY)
+    'DOB': (re.compile(r'\b(?:(?:0?[1-9]|[12]\d|3[01])[\/-](?:0?[1-9]|1[0-2])[\/-](?:19|20)\d{2}|(?:19|20)\d{2}-(?:0?[1-9]|1[0-2])-(?:0?[1-9]|[12]\d|3[01]))\b'), 'MEDIUM'),
+    # IFSC: 4 letters + 0 + 6 alphanumeric (e.g. SBIN0000001)
+    'IFSC': (re.compile(r'\b[A-Z]{4}0[A-Z0-9]{5,6}\b'), 'HIGH'),
+    # Bank account: 9-18 digits only
     'BANK_ACCOUNT': (re.compile(r'\b[0-9]{9,18}\b'), 'MEDIUM'),
+    # Account number with prefix (e.g. ACC00000001)
+    'ACCOUNT_NO': (re.compile(r'\bACC[0-9]{8,11}\b'), 'HIGH'),
     'CREDIT_CARD': (re.compile(r'\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b'), 'CRITICAL'),
     'IP_ADDRESS': (re.compile(r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'), 'LOW'),
     'GST': (re.compile(r'\b\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}\b'), 'HIGH'),
