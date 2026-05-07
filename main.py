@@ -268,7 +268,7 @@ def main():
     p.add_argument('--db', required=True,
         help='postgresql://u:p@h/db | oracle://u:p@h:1521/SID | mysql://u:p@h/db | /path/to.db')
     p.add_argument('--max-rows', type=int, default=1000)
-    p.add_argument('--threads', type=int, default=20, help='Parallel threads (default 20, max 50)')
+    p.add_argument("--threads", type=int, default=40, help="Parallel threads (default 40, max 50)")
     p.add_argument('--offline', action='store_true')
     p.add_argument('--verbose', action='store_true', help='Show detailed scan progress')
     p.set_defaults(func=cmd_scan_db)

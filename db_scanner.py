@@ -217,6 +217,7 @@ def _scan_pg_table(args):
     conn_str, schema, table, columns, max_rows = args
     import psycopg2
     findings = []
+    BATCH_SIZE = 50  # scan 50 columns per query to avoid huge SELECT lists
     try:
         conn = psycopg2.connect(conn_str, connect_timeout=10)
         cur = conn.cursor()
@@ -226,25 +227,33 @@ def _scan_pg_table(args):
         )
         if not columns:
             conn.close(); return findings
-        cols_sql = ', '.join(f'"{c}"::text' for c in columns)
-        try:
-            cur.execute(f'SELECT {cols_sql} FROM "{schema}"."{table}" TABLESAMPLE SYSTEM(10) LIMIT {max_rows}')
-        except Exception:
+
+        # Split columns into batches of BATCH_SIZE
+        col_batches = [columns[i:i+BATCH_SIZE] for i in range(0, len(columns), BATCH_SIZE)]
+        vprint(f"[PG] {schema}.{table} — {len(columns)} cols in {len(col_batches)} batches")
+
+        for batch in col_batches:
+            cols_sql = ', '.join(f'"{c}"::text' for c in batch)
             try:
-                cur.execute(f'SELECT {cols_sql} FROM "{schema}"."{table}" LIMIT {max_rows}')
-            except Exception:
-                conn.close(); return findings
-        rows = cur.fetchall()
-        vprint(f"[PG] {schema}.{table} — {len(rows)} rows, {len(columns)} cols")
-        for col_idx, col in enumerate(columns):
-            raw = []
-            for row in rows:
-                val = row[col_idx]
-                if val and len(str(val)) > 3:
-                    raw.extend(scan_text(str(val), f'{schema}.{table}.{col}'))
-            if raw:
-                vprint(f"  ✓ PII found: {schema}.{table}.{col} — {len(raw)} matches")
-                findings.extend(_aggregate_findings(raw, f'{schema}.{table}', col, 'postgresql'))
+                try:
+                    cur.execute(f'SELECT {cols_sql} FROM "{schema}"."{table}" TABLESAMPLE SYSTEM(10) LIMIT {max_rows}')
+                except Exception:
+                    cur.execute(f'SELECT {cols_sql} FROM "{schema}"."{table}" LIMIT {max_rows}')
+                rows = cur.fetchall()
+            except Exception as e:
+                vprint(f"[SKIP BATCH] {schema}.{table} batch — {e}")
+                continue
+
+            for col_idx, col in enumerate(batch):
+                raw = []
+                for row in rows:
+                    val = row[col_idx]
+                    if val and len(str(val)) > 3:
+                        raw.extend(scan_text(str(val), f'{schema}.{table}.{col}'))
+                if raw:
+                    vprint(f"  ✓ PII found: {schema}.{table}.{col} — {len(raw)} matches")
+                    findings.extend(_aggregate_findings(raw, f'{schema}.{table}', col, 'postgresql'))
+
         cur.close(); conn.close()
     except Exception as e:
         vprint(f"[SKIP] {schema}.{table} — {e}")
@@ -359,25 +368,32 @@ def _scan_oracle_table(args):
         )
         if not columns:
             conn.close(); return findings
-        cols_sql = ', '.join(f'"{c}"' for c in columns)
-        try:
-            cur.execute(f'SELECT {cols_sql} FROM "{owner}"."{table}" SAMPLE(5) FETCH FIRST {max_rows} ROWS ONLY')
-        except Exception:
+
+        BATCH_SIZE = 50  # scan 50 columns per query
+        col_batches = [columns[i:i+BATCH_SIZE] for i in range(0, len(columns), BATCH_SIZE)]
+        vprint(f"[ORACLE] {owner}.{table} — {len(columns)} cols in {len(col_batches)} batches")
+
+        for batch in col_batches:
+            cols_sql = ', '.join(f'"{c}"' for c in batch)
             try:
-                cur.execute(f'SELECT {cols_sql} FROM "{owner}"."{table}" WHERE ROWNUM <= {max_rows}')
-            except Exception:
-                conn.close(); return findings
-        rows = cur.fetchall()
-        vprint(f"[ORACLE] {owner}.{table} — {len(rows)} rows, {len(columns)} cols")
-        for col_idx, col in enumerate(columns):
-            raw = []
-            for row in rows:
-                val = row[col_idx]
-                if val and len(str(val)) > 3:
-                    raw.extend(scan_text(str(val), f'{owner}.{table}.{col}'))
-            if raw:
-                vprint(f"  ✓ PII found: {owner}.{table}.{col} — {len(raw)} matches")
-                findings.extend(_aggregate_findings(raw, f'{owner}.{table}', col, 'oracle'))
+                try:
+                    cur.execute(f'SELECT {cols_sql} FROM "{owner}"."{table}" SAMPLE(5) FETCH FIRST {max_rows} ROWS ONLY')
+                except Exception:
+                    cur.execute(f'SELECT {cols_sql} FROM "{owner}"."{table}" WHERE ROWNUM <= {max_rows}')
+                rows = cur.fetchall()
+            except Exception as e:
+                vprint(f"[SKIP BATCH] {owner}.{table} batch — {e}")
+                continue
+
+            for col_idx, col in enumerate(batch):
+                raw = []
+                for row in rows:
+                    val = row[col_idx]
+                    if val and len(str(val)) > 3:
+                        raw.extend(scan_text(str(val), f'{owner}.{table}.{col}'))
+                if raw:
+                    vprint(f"  ✓ PII found: {owner}.{table}.{col} — {len(raw)} matches")
+                    findings.extend(_aggregate_findings(raw, f'{owner}.{table}', col, 'oracle'))
         cur.close()
         if pool:
             try: pool.release(conn)
